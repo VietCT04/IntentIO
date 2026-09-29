@@ -1,0 +1,5 @@
+workload,requested_backend,actual_backend,coalescing,repetitions,requests,block_size,median_ms,p50_ms,p95_ms,p99_ms,throughput_mib_s,cpu_seconds,logical_reads,physical_reads,logical_bytes,physical_bytes,requests_merged,merge_saved_operations
+adjacent,sync,sync,on,9,256,4096,0.971,0.971,0.999,0.999,1029.825,0.010,2304,9,9437184,9437184,2295,2295
+adjacent,sync,sync,off,9,256,4096,1.233,1.233,1.237,1.237,811.325,0.012,2304,2304,9437184,9437184,0,0
+sequential,sync,sync,on,9,256,4096,1.753,1.753,1.786,1.786,570.294,0.017,2304,9,9437184,9437184,2295,2295
+random,auto,sync,on,9,256,4096,2.296,2.296,2.417,2.417,435.539,0.019,2304,2304,9437184,9437184,0,0
