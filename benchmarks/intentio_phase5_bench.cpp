@@ -68,7 +68,7 @@ void usage(const char* program) {
     std::cout << "usage: " << program << " [options]\n"
               << "  --workload sequential|random|latency|throughput|misuse|all\n"
               << "  --intent unknown|sequential|random|latency|throughput|scan_once|reuse_likely|seq_throughput|all\n"
-              << "  --backend sync|io_uring|auto --requests N --repetitions N\n"
+              << "  --backend sync|threaded|io_uring|auto --requests N --repetitions N\n"
               << "  --output FILE\n";
 }
 
@@ -130,7 +130,8 @@ Options parse_options(int argc, char** argv) {
     if (!valid_intent) {
         throw std::invalid_argument("unknown intent: " + options.intent);
     }
-    if (options.backend != "sync" && options.backend != "io_uring" &&
+    if (options.backend != "sync" && options.backend != "threaded" &&
+        options.backend != "io_uring" &&
         options.backend != "auto") {
         throw std::invalid_argument("unknown backend: " + options.backend);
     }
@@ -138,6 +139,9 @@ Options parse_options(int argc, char** argv) {
 }
 
 intentio::Backend parse_backend(const std::string& backend) {
+    if (backend == "threaded") {
+        return intentio::Backend::ThreadedPread;
+    }
     if (backend == "io_uring") {
         return intentio::Backend::IoUring;
     }
@@ -234,6 +238,8 @@ const char* backend_name(intentio::Backend backend) {
     switch (backend) {
     case intentio::Backend::Synchronous:
         return "sync";
+    case intentio::Backend::ThreadedPread:
+        return "threaded";
     case intentio::Backend::IoUring:
         return "io_uring";
     case intentio::Backend::Auto:

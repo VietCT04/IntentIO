@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 namespace intentio {
@@ -27,6 +28,25 @@ struct MetricsSnapshot {
     std::uint64_t intent_random_groups{};
     std::uint64_t latency_sensitive_groups{};
     std::uint64_t throughput_groups{};
+    std::uint64_t concurrency_increases{};
+    std::uint64_t concurrency_decreases{};
+    std::size_t current_concurrency{1};
+    std::size_t peak_concurrency{};
+    std::uint64_t controller_windows{};
+    double ewma_completion_latency_ms{};
+    double completion_rate{};
+    std::uint64_t executor_tasks_submitted{};
+    std::uint64_t executor_tasks_completed{};
+    std::uint64_t executor_queue_depth{};
+    std::uint64_t executor_queue_wait_ns{};
+    std::uint64_t executor_execution_ns{};
+    std::uint64_t executor_completion_dispatch_ns{};
+    std::uint64_t executor_worker_wakeups{};
+    std::uint64_t executor_spurious_wakeups{};
+    std::uint64_t executor_workers_busy{};
+    std::uint64_t executor_workers_idle{};
+    std::uint64_t executor_max_queue_depth{};
+    std::uint64_t executor_peak_in_flight{};
 };
 
 } // namespace intentio

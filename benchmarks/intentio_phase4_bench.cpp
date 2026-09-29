@@ -70,7 +70,7 @@ private:
 void usage(const char* program) {
     std::cout << "usage: " << program << " [options]\n"
               << "  --workload duplicates|hotset|nested|partial|nonoverlap|random|mixed\n"
-              << "  --backend sync|io_uring|auto\n"
+              << "  --backend sync|threaded|io_uring|auto\n"
               << "  --dedup on|off --coalesce on|off\n"
               << "  --requests N --block-size BYTES --repetitions N --gap BYTES\n"
               << "  --output FILE\n";
@@ -146,7 +146,8 @@ Options parse_options(int argc, char** argv) {
     if (!valid_workload) {
         throw std::invalid_argument("unknown workload: " + options.workload);
     }
-    if (options.backend != "sync" && options.backend != "io_uring" &&
+    if (options.backend != "sync" && options.backend != "threaded" &&
+        options.backend != "io_uring" &&
         options.backend != "auto") {
         throw std::invalid_argument("unknown backend: " + options.backend);
     }
@@ -160,6 +161,9 @@ Options parse_options(int argc, char** argv) {
 }
 
 intentio::Backend parse_backend(const std::string& backend) {
+    if (backend == "threaded") {
+        return intentio::Backend::ThreadedPread;
+    }
     if (backend == "io_uring") {
         return intentio::Backend::IoUring;
     }
@@ -238,6 +242,8 @@ const char* backend_name(intentio::Backend backend) {
     switch (backend) {
     case intentio::Backend::Synchronous:
         return "sync";
+    case intentio::Backend::ThreadedPread:
+        return "threaded";
     case intentio::Backend::IoUring:
         return "io_uring";
     case intentio::Backend::Auto:

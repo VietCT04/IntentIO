@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -221,12 +222,24 @@ IoUringBackend::~IoUringBackend() {
     delete impl_;
 }
 
-void IoUringBackend::execute(std::vector<PhysicalRead>& reads) {
+ExecutionStats IoUringBackend::execute(
+    std::vector<PhysicalRead>& reads,
+    const intentio::ExecutionPolicy& policy) {
     if (reads.empty()) {
-        return;
+        return {};
+    }
+    if (policy.max_in_flight == 0) {
+        throw std::invalid_argument("execution max in-flight must be greater than zero");
     }
 
-    const unsigned queue_depth = *impl_->sq_ring_entries;
+    const unsigned queue_depth = static_cast<unsigned>(std::min<std::size_t>(
+        *impl_->sq_ring_entries, policy.max_in_flight));
+    if (queue_depth == 0) {
+        throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again),
+                                "io_uring queue depth is zero");
+    }
+    ExecutionStats stats;
+    const auto start = std::chrono::steady_clock::now();
     for (std::size_t base = 0; base < reads.size();) {
         const std::size_t limit =
             std::min(reads.size(), base + static_cast<std::size_t>(queue_depth));
@@ -267,6 +280,7 @@ void IoUringBackend::execute(std::vector<PhysicalRead>& reads) {
             submit_all(*impl_, static_cast<unsigned>(queued.size()));
         }
 
+        const auto batch_start = std::chrono::steady_clock::now();
         std::size_t completed = 0;
         while (completed < queued.size()) {
             unsigned cq_head = *impl_->cq_head;
@@ -293,8 +307,23 @@ void IoUringBackend::execute(std::vector<PhysicalRead>& reads) {
             ++completed;
         }
 
+        const auto batch_stop = std::chrono::steady_clock::now();
+        const auto batch_elapsed = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                batch_stop - batch_start)
+                .count());
+        stats.total_latency_ns += batch_elapsed * queued.size();
+        stats.peak_in_flight = std::max(stats.peak_in_flight, queued.size());
+
         base = limit;
     }
+
+    const auto stop = std::chrono::steady_clock::now();
+    stats.completed = reads.size();
+    stats.elapsed_ns = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(stop - start)
+            .count());
+    return stats;
 }
 
 } // namespace intentio::detail

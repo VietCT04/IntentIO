@@ -589,6 +589,266 @@ void test_randomized_differential() {
     ::close(other_fd);
 }
 
+void test_threaded_backend_correctness() {
+    TestFile file(65536);
+    intentio::RuntimeOptions options;
+    options.backend = intentio::Backend::ThreadedPread;
+    options.threaded_worker_count = 8;
+    options.coalescing.enabled = false;
+
+    for (const std::size_t concurrency : {1U, 2U, 4U, 8U}) {
+        options.execution.max_in_flight = concurrency;
+        intentio::Runtime runtime(options);
+        auto group = runtime.create_group();
+        std::vector<intentio::ReadRequest> requests;
+        for (std::size_t index = 0; index < 16; ++index) {
+            const int fd = index % 7U == 0U ? -1 : file.fd();
+            const auto offset = static_cast<std::uint64_t>(index * 4096U);
+            const auto id = group.read(fd, offset, 1024);
+            requests.push_back(intentio::ReadRequest{id, fd, offset, 1024});
+        }
+        const auto actual = group.submit();
+        expect(runtime.backend() == intentio::Backend::ThreadedPread,
+               "threaded backend selection");
+        expect(runtime.metrics().peak_concurrency <= concurrency,
+               "threaded backend must respect fixed concurrency");
+        for (std::size_t index = 0; index < requests.size(); ++index) {
+            expect_same_result(actual[index], naive_read(requests[index]),
+                               "threaded concurrency=" +
+                                   std::to_string(concurrency) +
+                                   " request=" + std::to_string(index));
+        }
+    }
+}
+
+void test_threaded_randomized_differential() {
+    TestFile file(32768);
+    const int other_fd = ::dup(file.fd());
+    expect(other_fd >= 0, "dup should succeed for threaded randomized test");
+
+    struct RequestSpec {
+        int fd;
+        std::uint64_t offset;
+        std::size_t length;
+    };
+
+    std::mt19937 generator(719203);
+    std::uniform_int_distribution<std::size_t> request_count_distribution(1, 20);
+    std::uniform_int_distribution<std::uint64_t> offset_distribution(0, 36000);
+    std::uniform_int_distribution<std::size_t> length_distribution(0, 2048);
+    std::uniform_int_distribution<int> fd_distribution(0, 9);
+
+    for (std::size_t iteration = 0; iteration < 48; ++iteration) {
+        std::vector<RequestSpec> specs;
+        const std::size_t request_count = request_count_distribution(generator);
+        specs.reserve(request_count);
+        for (std::size_t index = 0; index < request_count; ++index) {
+            const int fd_choice = fd_distribution(generator);
+            specs.push_back(RequestSpec{
+                fd_choice == 0 ? -1 : (fd_choice < 5 ? file.fd() : other_fd),
+                offset_distribution(generator),
+                length_distribution(generator),
+            });
+        }
+
+        for (const std::size_t concurrency : {1U, 2U, 4U, 8U}) {
+            intentio::RuntimeOptions options;
+            options.backend = intentio::Backend::ThreadedPread;
+            options.threaded_worker_count = 8;
+            options.execution.max_in_flight = concurrency;
+            options.coalescing.enabled = false;
+            intentio::Runtime runtime(options);
+            auto group = runtime.create_group();
+            std::vector<intentio::ReadRequest> requests;
+            requests.reserve(specs.size());
+            for (const RequestSpec& spec : specs) {
+                const auto id = group.read(spec.fd, spec.offset, spec.length);
+                requests.push_back(
+                    intentio::ReadRequest{id, spec.fd, spec.offset, spec.length});
+            }
+
+            const auto actual = group.submit();
+            expect(actual.size() == requests.size(),
+                   "threaded randomized result count");
+            expect(runtime.metrics().peak_concurrency <= concurrency,
+                   "threaded randomized concurrency bound");
+            for (std::size_t index = 0; index < requests.size(); ++index) {
+                expect_same_result(
+                    actual[index], naive_read(requests[index]),
+                    "threaded randomized iteration=" +
+                        std::to_string(iteration) + " concurrency=" +
+                        std::to_string(concurrency) + " request=" +
+                        std::to_string(index));
+            }
+        }
+
+        intentio::RuntimeOptions adaptive_options;
+        adaptive_options.backend = intentio::Backend::ThreadedPread;
+        adaptive_options.threaded_worker_count = 8;
+        adaptive_options.execution.max_in_flight = 8;
+        adaptive_options.coalescing.enabled = false;
+        adaptive_options.adaptive_execution.enabled = true;
+        adaptive_options.adaptive_execution.intent.unknown.observation_window = 4;
+        adaptive_options.adaptive_execution.intent.unknown.max_in_flight = 8;
+        intentio::Runtime adaptive_runtime(adaptive_options);
+        auto adaptive_group = adaptive_runtime.create_group();
+        std::vector<intentio::ReadRequest> adaptive_requests;
+        adaptive_requests.reserve(specs.size());
+        for (const RequestSpec& spec : specs) {
+            const auto id = adaptive_group.read(spec.fd, spec.offset, spec.length);
+            adaptive_requests.push_back(
+                intentio::ReadRequest{id, spec.fd, spec.offset, spec.length});
+        }
+        const auto adaptive_actual = adaptive_group.submit();
+        expect(adaptive_actual.size() == adaptive_requests.size(),
+               "adaptive threaded randomized result count");
+        for (std::size_t index = 0; index < adaptive_requests.size(); ++index) {
+            expect_same_result(
+                adaptive_actual[index], naive_read(adaptive_requests[index]),
+                "adaptive threaded randomized iteration=" +
+                    std::to_string(iteration) + " request=" +
+                    std::to_string(index));
+        }
+    }
+    ::close(other_fd);
+}
+
+void test_adaptive_concurrency() {
+    TestFile file(131072);
+    intentio::RuntimeOptions options;
+    options.backend = intentio::Backend::ThreadedPread;
+    options.threaded_worker_count = 8;
+    options.execution.max_in_flight = 8;
+    options.coalescing.enabled = false;
+    options.adaptive_execution.enabled = true;
+    options.adaptive_execution.intent.unknown.observation_window = 4;
+    options.adaptive_execution.intent.unknown.max_in_flight = 8;
+
+    intentio::Runtime runtime(options);
+    for (std::size_t repetition = 0; repetition < 12; ++repetition) {
+        auto group = runtime.create_group();
+        for (std::size_t index = 0; index < 8; ++index) {
+            group.read(file.fd(), static_cast<std::uint64_t>(index * 8192U), 4096);
+        }
+        const auto results = group.submit();
+        for (const auto& result : results) {
+            expect(result.ok() && result.bytes_read() == 4096,
+                   "adaptive threaded read should complete");
+        }
+    }
+
+    const auto metrics = runtime.metrics();
+    expect(metrics.controller_windows >= 1,
+           "adaptive controller should complete observation windows");
+    expect(metrics.concurrency_increases >= 1,
+           "adaptive controller should probe higher concurrency");
+    expect(metrics.current_concurrency >= 1 && metrics.current_concurrency <= 8,
+           "adaptive current concurrency bounds");
+    expect(metrics.peak_concurrency <= 8,
+           "adaptive peak concurrency bounds");
+    expect(metrics.ewma_completion_latency_ms >= 0.0,
+           "adaptive EWMA latency should be non-negative");
+    expect(metrics.completion_rate > 0.0,
+           "adaptive completion rate should be positive");
+}
+
+void test_threaded_lifecycle() {
+    TestFile file(4096);
+    for (std::size_t iteration = 0; iteration < 1000; ++iteration) {
+        intentio::RuntimeOptions options;
+        options.backend = intentio::Backend::ThreadedPread;
+        options.threaded_worker_count = 1;
+        options.execution.max_in_flight = 1;
+        intentio::Runtime runtime(options);
+        auto group = runtime.create_group();
+        group.read(file.fd(), 0, 16);
+        const auto results = group.submit();
+        expect(results.size() == 1 && results[0].ok() &&
+                   results[0].bytes_read() == 16,
+               "threaded lifecycle iteration should complete");
+    }
+}
+
+void test_concurrent_submissions_and_error_isolation() {
+    TestFile file(64U * 1024U * 1024U);
+    intentio::RuntimeOptions options;
+    options.backend = intentio::Backend::ThreadedPread;
+    options.threaded_worker_count = 8;
+    options.execution.max_in_flight = 4;
+    options.coalescing.enabled = false;
+    intentio::Runtime runtime(options);
+
+    auto large_group = runtime.create_group();
+    for (std::size_t index = 0; index < 4096; ++index) {
+        large_group.read(file.fd(), static_cast<std::uint64_t>(index * 4096U), 4096);
+    }
+
+    auto invalid_group = runtime.create_group();
+    invalid_group.latency_class(intentio::LatencyClass::LatencySensitive);
+    invalid_group.read(-1, 0, 64);
+
+    auto valid_group = runtime.create_group();
+    valid_group.read(file.fd(), 1024, 128);
+    valid_group.read(file.fd(), 8192, 256);
+
+    auto large_submission = runtime.submit(large_group);
+    auto invalid_submission = runtime.submit(invalid_group);
+    auto valid_submission = runtime.submit(valid_group);
+
+    const auto invalid_results = invalid_submission.get();
+    expect(invalid_results.size() == 1 && !invalid_results[0].ok() &&
+               invalid_results[0].error == std::make_error_code(std::errc::bad_file_descriptor),
+           "one failed group must retain its own error");
+
+    const auto valid_results = valid_submission.get();
+    expect_result(valid_results[0], file.expected(1024, 128),
+                  "concurrent valid group first result");
+    expect_result(valid_results[1], file.expected(8192, 256),
+                  "concurrent valid group second result");
+
+    const auto large_results = large_submission.get();
+    expect(large_results.size() == 4096,
+           "large concurrent group should complete independently");
+    expect_result(large_results.front(), file.expected(0, 4096),
+                  "large concurrent group first result");
+    expect_result(large_results.back(), file.expected(4095U * 4096U, 4096),
+                  "large concurrent group last result");
+
+    const auto metrics = runtime.metrics();
+    expect(metrics.executor_tasks_submitted >= 4099,
+           "global executor should see all physical tasks");
+    expect(metrics.executor_tasks_completed == metrics.executor_tasks_submitted,
+           "global executor task accounting should balance");
+    expect(metrics.executor_peak_in_flight >= 2 &&
+               metrics.executor_peak_in_flight <= 4,
+           "global executor should overlap groups within its limit");
+    expect(metrics.executor_max_queue_depth >= 4096,
+           "global executor should report sustained queued work");
+}
+
+void test_submission_survives_runtime_destruction() {
+    TestFile file(16U * 1024U * 1024U);
+    intentio::Submission submission;
+    {
+        intentio::RuntimeOptions options;
+        options.backend = intentio::Backend::ThreadedPread;
+        options.threaded_worker_count = 4;
+        options.execution.max_in_flight = 4;
+        options.coalescing.enabled = false;
+        intentio::Runtime runtime(options);
+        auto group = runtime.create_group();
+        for (std::size_t index = 0; index < 2048; ++index) {
+            group.read(file.fd(), static_cast<std::uint64_t>(index * 4096U), 4096);
+        }
+        submission = runtime.submit(group);
+    }
+
+    const auto results = submission.get();
+    expect(results.size() == 2048 && results.front().ok() &&
+               results.back().ok(),
+           "submission must keep its executor alive after Runtime destruction");
+}
+
 void test_auto_backend() {
     TestFile file(4096);
     intentio::RuntimeOptions options;
@@ -599,6 +859,9 @@ void test_auto_backend() {
     group.read(file.fd(), 256, 128);
     const auto results = group.submit();
     expect_result(results[0], file.expected(256, 128), "auto backend");
+    expect(runtime.backend() == intentio::Backend::IoUring ||
+               runtime.backend() == intentio::Backend::ThreadedPread,
+           "auto backend should select an available concurrent backend");
 }
 
 } // namespace
@@ -614,6 +877,12 @@ int main() {
         test_contained_and_partial_overlap();
         test_overlap_limits_and_file_descriptors();
         test_randomized_differential();
+        test_threaded_backend_correctness();
+        test_threaded_randomized_differential();
+        test_adaptive_concurrency();
+        test_threaded_lifecycle();
+        test_concurrent_submissions_and_error_isolation();
+        test_submission_survives_runtime_destruction();
         test_auto_backend();
         std::cout << "IntentIO tests passed\n";
         return 0;

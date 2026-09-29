@@ -3,6 +3,8 @@
 #include "group.hpp"
 #include "metrics.hpp"
 #include "policy.hpp"
+#include "execution.hpp"
+#include "submission.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -12,6 +14,7 @@ namespace intentio {
 
 enum class Backend {
     Synchronous,
+    ThreadedPread,
     IoUring,
     Auto,
 };
@@ -33,6 +36,10 @@ struct RuntimeOptions {
     CoalescingOptions coalescing{};
     DeduplicationOptions deduplication{};
     IntentPolicyOptions intent_policy{};
+    ExecutionPolicy execution{};
+    AdaptiveExecutionOptions adaptive_execution{};
+    std::size_t threaded_worker_count{32};
+    std::size_t executor_batch_size{1};
     bool trace_plan{false};
 };
 
@@ -46,6 +53,8 @@ public:
     ~Runtime();
 
     [[nodiscard]] Group create_group();
+    [[nodiscard]] Submission submit(Group& group);
+    [[nodiscard]] Submission submit(Group&& group) { return submit(group); }
     [[nodiscard]] Backend backend() const noexcept;
     [[nodiscard]] MetricsSnapshot metrics() const;
 

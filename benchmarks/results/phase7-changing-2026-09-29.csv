@@ -1,0 +1,5 @@
+workload,phase,workers,max_qd,executor_batch_size,producers,groups,requests,wall_ms,tasks_per_sec,completion_p50_ms,completion_p95_ms,current_qd,peak_qd,controller_windows,ewma_latency_ms,completion_rate,executor_tasks_submitted,executor_tasks_completed,queue_depth,queue_wait_ns,execution_ns,completion_dispatch_ns
+random4k,random4k,16,16,1,4,32,128,81.043,50540.853,71.610,73.389,1,2,32,0.002,1882.044,4096,4096,0,153096553000,9571272,53341139
+sequential,sequential,16,16,1,4,32,128,5096.613,803.671,3742.558,3888.201,2,2,64,0.155,37.808,4096,4096,0,7457059562035,748710213,4027646042
+random64k,random64k,16,16,1,4,32,128,266.948,15343.830,193.334,205.712,1,2,96,0.011,721.418,4096,4096,0,7833713427913,804249225,4217051467
+mixed,mixed,16,16,1,4,32,128,534.698,7660.404,422.672,445.115,1,2,128,0.019,331.113,4096,4096,0,8741775318929,891847433,4591436339

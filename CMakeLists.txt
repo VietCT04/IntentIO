@@ -16,16 +16,24 @@ option(INTENTIO_BUILD_EXAMPLES "Build IntentIO examples" ON)
 option(INTENTIO_ENABLE_SANITIZERS "Enable AddressSanitizer and UBSan" OFF)
 option(INTENTIO_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
 
+find_package(Threads REQUIRED)
+
 add_library(intentio STATIC
     src/backends/io_uring_backend.cpp
     src/backends/sync_backend.cpp
+    src/backends/threaded_pread_backend.cpp
+    src/concurrency.cpp
+    src/execution_policy.cpp
     src/group.cpp
     src/policy.cpp
     src/planner.cpp
     src/runtime.cpp
+    src/submission.cpp
 )
 
 add_library(intentio::intentio ALIAS intentio)
+
+target_link_libraries(intentio PUBLIC Threads::Threads)
 
 target_compile_features(intentio PUBLIC cxx_std_20)
 target_include_directories(intentio
@@ -74,6 +82,12 @@ if (INTENTIO_BUILD_BENCHMARKS)
 
     add_executable(intentio_phase5_benchmark benchmarks/intentio_phase5_bench.cpp)
     target_link_libraries(intentio_phase5_benchmark PRIVATE intentio)
+
+    add_executable(intentio_phase6_benchmark benchmarks/intentio_phase6_bench.cpp)
+    target_link_libraries(intentio_phase6_benchmark PRIVATE intentio)
+
+    add_executable(intentio_phase7_benchmark benchmarks/intentio_phase7_bench.cpp)
+    target_link_libraries(intentio_phase7_benchmark PRIVATE intentio)
 endif()
 
 if (INTENTIO_BUILD_EXAMPLES)

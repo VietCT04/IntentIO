@@ -1,0 +1,2 @@
+mode,workload,case,requested_backend,actual_backend,workers,qd,executor_batch_size,producers,groups,requests,file_state,cache_state,fair_p50_ms,fair_p95_ms,default_p50_ms,default_p95_ms,fair_small_before_large_done,default_small_before_large_done,fair_small_count,default_small_count
+fairness,random4k,latency-sensitive-vs-default,threaded,threaded,8,4,1,1,16,64,sparse,warm-buffered,0.056,0.129,0.059,0.090,16,16,16,16
