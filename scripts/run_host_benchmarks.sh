@@ -15,6 +15,7 @@ PHASE7_EXECUTOR_RESULT_FILE="$RESULT_DIR/phase7-executor-host-$STAMP.csv"
 PHASE7_BATCH_RESULT_FILE="$RESULT_DIR/phase7-batch-host-$STAMP.csv"
 PHASE7_WORKLOAD_RESULT_FILE="$RESULT_DIR/phase7-workload-host-$STAMP.csv"
 PHASE7_FAIRNESS_RESULT_FILE="$RESULT_DIR/phase7-fairness-host-$STAMP.csv"
+PHASE8_CAPABILITY_RESULT_FILE="$RESULT_DIR/phase8-capability-host-$STAMP.txt"
 METADATA_FILE="$RESULT_DIR/phase4-host-$STAMP.txt"
 
 if ! command -v cmake >/dev/null 2>&1; then
@@ -50,12 +51,15 @@ PLANNER_BENCH="$BUILD_DIR/intentio_planner_benchmark"
 PHASE5_BENCH="$BUILD_DIR/intentio_phase5_benchmark"
 PHASE6_BENCH="$BUILD_DIR/intentio_phase6_benchmark"
 PHASE7_BENCH="$BUILD_DIR/intentio_phase7_benchmark"
+PHASE8_INFO="$BUILD_DIR/intentio-info"
 if [ ! -x "$PHASE4_BENCH" ] || [ ! -x "$PLANNER_BENCH" ] ||
    [ ! -x "$PHASE5_BENCH" ] || [ ! -x "$PHASE6_BENCH" ] ||
-   [ ! -x "$PHASE7_BENCH" ]; then
+   [ ! -x "$PHASE7_BENCH" ] || [ ! -x "$PHASE8_INFO" ]; then
     echo "Expected benchmark binaries were not produced in $BUILD_DIR" >&2
     exit 1
 fi
+
+"$PHASE8_INFO" "$ROOT_DIR" | tee "$PHASE8_CAPABILITY_RESULT_FILE"
 
 IO_URING_CHECK=$(mktemp)
 if "$PHASE6_BENCH" --workload random4k --backend io_uring --mode fixed \
@@ -208,4 +212,5 @@ echo "Phase 7 executor results: $PHASE7_EXECUTOR_RESULT_FILE"
 echo "Phase 7 batch-size results: $PHASE7_BATCH_RESULT_FILE"
 echo "Phase 7 workload results: $PHASE7_WORKLOAD_RESULT_FILE"
 echo "Phase 7 fairness results: $PHASE7_FAIRNESS_RESULT_FILE"
+echo "Phase 8 io_uring capability: $PHASE8_CAPABILITY_RESULT_FILE"
 echo "Environment metadata: $METADATA_FILE"

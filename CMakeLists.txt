@@ -70,6 +70,8 @@ if (INTENTIO_BUILD_TESTS)
 endif()
 
 if (INTENTIO_BUILD_BENCHMARKS)
+    add_executable(intentio-info benchmarks/intentio_info.cpp)
+
     add_executable(intentio_benchmark benchmarks/intentio_bench.cpp)
     target_link_libraries(intentio_benchmark PRIVATE intentio)
 

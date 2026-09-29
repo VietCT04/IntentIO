@@ -207,6 +207,7 @@ Build the benchmark target and run, for example:
 ./build/intentio_phase7_benchmark --mode changing --workers 32 --max-qd 32
 ./build/intentio_phase7_benchmark --mode fairness --workers 8 --qd 8
 ./build/intentio_planner_benchmark
+./build/intentio-info .
 
 # On a normal Linux host, collect the full matrix and environment metadata.
 ./scripts/run_host_benchmarks.sh
@@ -227,6 +228,13 @@ for groups from 8 through 8192. These tools use temporary files and do not
 claim that an optimization is beneficial without measured output. Captured
 results and interpretation live under `benchmarks/results/` and
 `docs/experiments/`.
+
+`intentio-info` probes native `io_uring` directly and reports kernel features,
+setup flags, ring entries, filesystem, storage-device identity, CPU count, and
+memory. If `io_uring_setup` fails, it prints `io_uring_available=no`; the host
+benchmark script then skips native io_uring matrices rather than recording
+threaded fallback as io_uring. Phase 8 capability and decision notes live in
+[`EXP-008`](docs/experiments/EXP-008-io-uring.md).
 
 ## Current limitations
 
