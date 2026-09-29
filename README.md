@@ -17,6 +17,7 @@ The first release focuses on a small, testable foundation:
   concurrency;
 - nonblocking `Runtime::submit(Group&)` submissions with independent result
   handles;
+- move-only managed `File` ownership with capability-aware direct-I/O reads;
 - a reproducible benchmark harness and experiment notes.
 
 IntentIO is not a replacement for raw `io_uring`. It adds a planning layer
@@ -89,6 +90,26 @@ Results own their bytes, and a short successful result represents EOF rather
 than an error. Invalid descriptors and backend failures are reported in the
 corresponding `ReadResult::error`.
 
+For lifetime-safe kernel I/O policy and optional direct I/O, open a managed
+file. It owns its buffered descriptor and, when supported, an independent
+`O_DIRECT` descriptor; caller-owned descriptors remain available through the
+original `read(fd, ...)` overload.
+
+```cpp
+auto file = intentio::File::open(path);
+intentio::Runtime io;
+auto group = io.create_group();
+group.read(file, 0, 256 * 1024);
+group.io_cache_mode(intentio::IOCacheMode::Direct);
+
+const auto results = group.submit();
+```
+
+`File::capabilities()` reports the runtime's `statx`-derived memory and offset
+alignments. Explicit `Direct` requests return an error when the managed file
+cannot satisfy the request; automatic selection may fall back to its existing
+buffered or `DONTCACHE` policy.
+
 ## Architecture
 
 ```text
@@ -103,7 +124,7 @@ Group C ----┘                    |
                      threaded pread  io_uring
                             |
                     KernelIOPolicy
-                 fadvise / RWF_DONTCACHE
+             fadvise / RWF_DONTCACHE / O_DIRECT
 ```
 
 Planning determines what physical I/O exists, scheduling determines which
@@ -180,16 +201,16 @@ tests, and benchmarks.
 Intent-aware policy, amplification budgets, merge-decision metrics, and plan
 tracing are implemented and documented in EXP-005.
 
-Experimental: adaptive concurrency and io_uring performance comparisons
-require a host that permits the relevant backend. The current development
-container returns `EPERM` from `io_uring_setup`; `Backend::Auto` therefore uses
-threaded `pread` here. The adaptive controller is deliberately conservative
-and is not expected to improve every workload.
+Experimental: managed direct I/O, automatic direct-I/O thresholds, adaptive
+concurrency, and io_uring performance comparisons require a host that permits
+the relevant capability. The current development container returns `EPERM`
+from `io_uring_setup`; `Backend::Auto` therefore uses threaded `pread` here.
+The adaptive controller is deliberately conservative and is not expected to
+improve every workload.
 
-Planned: prefetching, O_DIRECT policy, zero-copy result storage, and coroutine
-APIs. The Phase 9 kernel-I/O policy is implemented for the synchronous and
-threaded-`pread` paths; native io_uring remains unvalidated on hosts that
-reject `io_uring_setup`.
+Planned: aligned-range expansion for direct I/O, prefetching, zero-copy result
+storage, and coroutine APIs. Direct I/O intentionally does not expand or trim
+unaligned logical ranges in this phase.
 
 ## Benchmarks
 
@@ -222,6 +243,14 @@ Build the benchmark target and run, for example:
   --workload random4k --materialize-file
 ./build/intentio_phase9_benchmark --mode cache-pollution --hot-mib 4 \
   --scan-mib 64 --materialize-file
+./build/intentio_phase10_benchmark --mode correctness --policy buffered \
+  --materialize-file
+./build/intentio_phase10_benchmark --mode scan --policy direct \
+  --workload sequential --request-size 1048576 --qd 16 \
+  --workers 16 --requests 64 --materialize-file
+./build/intentio_phase10_benchmark --mode scan --policy threshold \
+  --direct-threshold 1048576 --workload sequential --request-size 1048576 \
+  --qd 16 --workers 16 --requests 64 --materialize-file
 
 # On a normal Linux host, collect the full matrix and environment metadata.
 ./scripts/run_host_benchmarks.sh
@@ -255,10 +284,12 @@ coalescing and deduplication. It compares baseline, sequential, random,
 NOREUSE, and `RWF_DONTCACHE` scans, and records advice calls, DONTCACHE
 successes/fallbacks, buffered bytes, CPU time, page faults, and queue-depth
 latencies. `intentio-info` also reports the local `RWF_DONTCACHE` probe and
-`STATX_DIOALIGN` values. O_DIRECT is only measured as a capability boundary in
-the experiment; IntentIO does not yet open files with O_DIRECT or alter
-arbitrary caller-owned descriptors. Phase 9 results and interpretation live in
-[`EXP-009`](docs/experiments/EXP-009-kernel-io-intent.md).
+`STATX_DIOALIGN` values. Phase 10 adds managed-file lifetime tests, direct-I/O
+correctness and fallback tests, direct-versus-buffered/DONTCACHE matrices,
+planner-shaped and duplicate-heavy workloads, reread and cache-pressure
+observations, producer/concurrency runs, and threshold experiments. Phase 9
+and Phase 10 results and interpretation live in [`EXP-009`](docs/experiments/EXP-009-kernel-io-intent.md)
+and [`EXP-010`](docs/experiments/EXP-010-managed-direct-io.md).
 
 ## Current limitations
 
@@ -268,9 +299,10 @@ arbitrary caller-owned descriptors. Phase 9 results and interpretation live in
 - The global scheduler applies `RuntimeOptions::execution.max_in_flight` across
   all groups, not once per group. Latency-sensitive work receives bounded
   priority bursts and cannot permanently starve normal work.
-- Prefetching, userspace caching, direct-I/O policy, zero-copy result storage,
-  and coroutine APIs are not implemented. Kernel cache hints are opt-in through
-  application intent and are not a universal performance guarantee.
+- Aligned-range expansion for direct I/O, prefetching, userspace caching,
+  zero-copy result storage, and coroutine APIs are not implemented. Kernel
+  cache hints are opt-in through application intent and are not a universal
+  performance guarantee.
 - The io_uring backend is intentionally small and uses one runtime-owned ring;
   multi-group scheduling is validated here on threaded `pread` because this
   environment rejects io_uring setup.

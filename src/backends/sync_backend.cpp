@@ -1,5 +1,9 @@
 #include "detail/backends.hpp"
 
+#include "detail/aligned_buffer.hpp"
+#include "detail/file_state.hpp"
+
+#include <algorithm>
 #include <cerrno>
 #include <climits>
 #include <chrono>
@@ -101,6 +105,109 @@ void execute_buffered(PhysicalRead& read) {
     read.kernel_io_stats.bytes_buffered += completed;
 }
 
+bool is_aligned(std::uint64_t value, std::size_t alignment) noexcept {
+    return alignment != 0 && value % alignment == 0;
+}
+
+bool is_size_aligned(std::size_t value, std::size_t alignment) noexcept {
+    return alignment != 0 && value % alignment == 0;
+}
+
+bool execute_direct(PhysicalRead& read, bool allow_fallback) {
+    ++read.kernel_io_stats.direct_reads_attempted;
+    if (!read.request.managed_file) {
+        ++read.kernel_io_stats.direct_unsupported;
+        if (allow_fallback) {
+            return false;
+        }
+        read.error = std::make_error_code(std::errc::operation_not_supported);
+        return true;
+    }
+
+    const auto& file = *read.request.managed_file;
+    const auto& capabilities = file.capabilities;
+    if (!capabilities.direct_io_supported || file.direct_fd < 0) {
+        ++read.kernel_io_stats.direct_unsupported;
+        if (file.direct_open_errno != 0) {
+            ++read.kernel_io_stats.direct_open_failures;
+        }
+        if (allow_fallback) {
+            return false;
+        }
+        read.error = std::make_error_code(std::errc::operation_not_supported);
+        return true;
+    }
+    if (!is_aligned(read.request.offset, capabilities.read_offset_alignment) ||
+        !is_size_aligned(read.request.length, capabilities.offset_alignment)) {
+        ++read.kernel_io_stats.direct_alignment_fallbacks;
+        if (allow_fallback) {
+            return false;
+        }
+        read.error = std::make_error_code(std::errc::invalid_argument);
+        return true;
+    }
+
+    std::error_code allocation_error;
+    AlignedBuffer buffer = AlignedBuffer::allocate(
+        read.request.length,
+        capabilities.memory_alignment,
+        allocation_error);
+    if (buffer.data() == nullptr) {
+        read.error = allocation_error.value() == 0
+                         ? std::make_error_code(std::errc::not_enough_memory)
+                         : allocation_error;
+        return true;
+    }
+    if (reinterpret_cast<std::uintptr_t>(buffer.data()) %
+            capabilities.memory_alignment !=
+        0U) {
+        ++read.kernel_io_stats.direct_alignment_fallbacks;
+        if (allow_fallback) {
+            return false;
+        }
+        read.error = std::make_error_code(std::errc::invalid_argument);
+        return true;
+    }
+
+    read.bytes_read = 0;
+    std::size_t remaining = read.request.length;
+    std::size_t completed = 0;
+    while (remaining != 0) {
+        const std::size_t count =
+            remaining > static_cast<std::size_t>(SSIZE_MAX)
+                ? static_cast<std::size_t>(SSIZE_MAX)
+                : remaining;
+        const ssize_t result = ::pread(
+            file.direct_fd,
+            buffer.data() + completed,
+            count,
+            static_cast<off_t>(read.request.offset + completed));
+        if (result < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            read.error = std::error_code(errno, std::generic_category());
+            break;
+        }
+        if (result == 0) {
+            break;
+        }
+        completed += static_cast<std::size_t>(result);
+        remaining -= static_cast<std::size_t>(result);
+        if (static_cast<std::size_t>(result) < count) {
+            break;
+        }
+    }
+
+    read.bytes_read = completed;
+    if (!read.error) {
+        std::copy_n(buffer.data(), completed, read.data.data());
+        ++read.kernel_io_stats.direct_reads_succeeded;
+        read.kernel_io_stats.direct_bytes += completed;
+    }
+    return true;
+}
+
 bool execute_dontcache(PhysicalRead& read) {
     ++read.kernel_io_stats.dontcache_reads_attempted;
     read.bytes_read = 0;
@@ -159,6 +266,10 @@ void execute_pread(PhysicalRead& read, const KernelIOPolicy& policy) {
         return;
     }
 
+    if (read.request.managed_file) {
+        ++read.kernel_io_stats.managed_file_reads;
+    }
+
     if (read.request.offset >
             static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()) ||
         read.request.length >
@@ -168,12 +279,41 @@ void execute_pread(PhysicalRead& read, const KernelIOPolicy& policy) {
         return;
     }
 
+    intentio::CachePolicy selected_cache_policy = policy.cache_policy;
+    if (policy.requested_mode == intentio::IOCacheMode::Auto &&
+        policy.auto_direct_threshold_bytes != 0 &&
+        read.request.managed_file &&
+        read.request.length >= policy.auto_direct_threshold_bytes) {
+        selected_cache_policy = intentio::CachePolicy::Direct;
+    }
+
+    if (policy.requested_mode == intentio::IOCacheMode::Auto) {
+        switch (selected_cache_policy) {
+        case intentio::CachePolicy::Normal:
+            ++read.kernel_io_stats.auto_selected_buffered;
+            break;
+        case intentio::CachePolicy::DontCache:
+            ++read.kernel_io_stats.auto_selected_dontcache;
+            break;
+        case intentio::CachePolicy::Direct:
+            ++read.kernel_io_stats.auto_selected_direct;
+            break;
+        }
+    }
+
     record_advice(read, policy);
-    if (policy.cache_policy == intentio::CachePolicy::DontCache &&
+    if (selected_cache_policy == intentio::CachePolicy::Direct) {
+        if (execute_direct(read,
+                           policy.requested_mode == intentio::IOCacheMode::Auto)) {
+            return;
+        }
+        selected_cache_policy = policy.cache_policy;
+    }
+    if (selected_cache_policy == intentio::CachePolicy::DontCache &&
         execute_dontcache(read)) {
         return;
     }
-    if (policy.cache_policy == intentio::CachePolicy::DontCache) {
+    if (selected_cache_policy == intentio::CachePolicy::DontCache) {
         ++read.kernel_io_stats.dontcache_unsupported;
         ++read.kernel_io_stats.dontcache_fallbacks;
         read.error = {};

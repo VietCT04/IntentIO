@@ -1,5 +1,7 @@
 #pragma once
 
+#include "kernel_io.hpp"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -36,6 +38,7 @@ struct GroupHints {
     ReuseHint reuse_hint{ReuseHint::Unknown};
     Priority priority{Priority::Normal};
     LatencyClass latency_class{LatencyClass::Default};
+    IOCacheMode io_cache_mode{IOCacheMode::Auto};
 };
 
 } // namespace intentio

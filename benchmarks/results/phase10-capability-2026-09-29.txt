@@ -1,0 +1,15 @@
+kernel=7.0.0-31-generic
+filesystem=type=0xef53
+storage_device=stat_dev=259:7 sysfs=../../devices/pci0000:00/0000:00:0e.0/pci10000:e0/10000:e0:06.0/10000:e1:00.0/nvme/nvme0/nvme0n1/nvme0n1p7
+cpu_count=16
+memory_total=23765256 kB
+compiled setup flags: IOPOLL SQPOLL SQ_AFF CQSIZE CLAMP ATTACH_WQ R_DISABLED SUBMIT_ALL COOP_TASKRUN TASKRUN_FLAG SQE128 CQE32 SINGLE_ISSUER DEFER_TASKRUN NO_MMAP REGISTERED_FD_ONLY NO_SQARRAY HYBRID_IOPOLL CQE_MIXED SQE_MIXED SQ_REWIND
+managed_file_open=yes
+rwf_dontcache=usable=yes bytes=4096
+statx_dioalign=supported memory_alignment=4 offset_alignment=512
+direct_io=supported=yes
+io_uring_available=no
+io_uring_setup_errno=1 (Operation not permitted)
+setup_features=unavailable
+supported_setup_flags=unavailable
+ring_entries=unavailable

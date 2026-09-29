@@ -116,7 +116,8 @@ public:
     ~IoUringBackend();
 
     ExecutionStats execute(std::vector<PhysicalRead>& reads,
-                           const intentio::ExecutionPolicy& policy);
+                           const intentio::ExecutionPolicy& policy,
+                           const KernelIOPolicy& kernel_policy);
 
 private:
     Impl* impl_{};

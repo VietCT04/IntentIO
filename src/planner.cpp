@@ -108,6 +108,7 @@ PhysicalRequest make_physical_request(const ReadRequest& logical,
                                       std::size_t logical_index) {
     PhysicalRequest physical{
         logical.fd,
+        logical.managed_file,
         logical.offset,
         logical.length,
         {{logical_index, 0, logical.length}},

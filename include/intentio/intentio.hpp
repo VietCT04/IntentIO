@@ -2,6 +2,7 @@
 
 #include "group.hpp"
 #include "hints.hpp"
+#include "file.hpp"
 #include "kernel_io.hpp"
 #include "metrics.hpp"
 #include "policy.hpp"

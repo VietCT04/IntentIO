@@ -6,10 +6,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace intentio::detail {
+
+struct FileState;
 
 struct PhysicalSlice {
     std::size_t logical_index{};
@@ -19,6 +22,7 @@ struct PhysicalSlice {
 
 struct PhysicalRequest {
     int fd{-1};
+    std::shared_ptr<FileState> managed_file{};
     std::uint64_t offset{};
     std::size_t length{};
     std::vector<PhysicalSlice> slices;

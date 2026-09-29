@@ -1,16 +1,20 @@
 #include <intentio/intentio.hpp>
 
+#include "detail/aligned_buffer.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <dirent.h>
 #include <fcntl.h>
 #include <iostream>
 #include <random>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -80,10 +84,93 @@ private:
     std::size_t size_{};
 };
 
+class ManagedTestFile {
+public:
+    explicit ManagedTestFile(std::size_t size) : size_(size) {
+        char path[] = "/tmp/intentio-managed-test-XXXXXX";
+        const int fd = ::mkstemp(path);
+        if (fd < 0) {
+            throw std::runtime_error(std::string("mkstemp: ") + std::strerror(errno));
+        }
+        path_ = path;
+        if (::ftruncate(fd, static_cast<off_t>(size)) != 0) {
+            const int saved_errno = errno;
+            ::close(fd);
+            ::unlink(path_.c_str());
+            throw std::system_error(saved_errno, std::generic_category(), "ftruncate");
+        }
+
+        std::vector<std::byte> contents(size);
+        for (std::size_t index = 0; index < size; ++index) {
+            contents[index] = static_cast<std::byte>((index * 3U) % 251U);
+        }
+        std::size_t written = 0;
+        while (written < contents.size()) {
+            const ssize_t result = ::pwrite(fd,
+                                            contents.data() + written,
+                                            contents.size() - written,
+                                            static_cast<off_t>(written));
+            if (result < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                const int saved_errno = errno;
+                ::close(fd);
+                ::unlink(path_.c_str());
+                throw std::system_error(saved_errno, std::generic_category(), "pwrite");
+            }
+            if (result == 0) {
+                ::close(fd);
+                ::unlink(path_.c_str());
+                throw std::runtime_error("pwrite made no progress");
+            }
+            written += static_cast<std::size_t>(result);
+        }
+        ::close(fd);
+    }
+
+    ManagedTestFile(const ManagedTestFile&) = delete;
+    ManagedTestFile& operator=(const ManagedTestFile&) = delete;
+
+    ~ManagedTestFile() {
+        if (!path_.empty()) {
+            ::unlink(path_.c_str());
+        }
+    }
+
+    [[nodiscard]] const std::string& path() const noexcept { return path_; }
+
+    [[nodiscard]] std::vector<std::byte> expected(std::uint64_t offset,
+                                                  std::size_t length) const {
+        const std::size_t available =
+            offset >= size_ ? 0 : std::min(length, size_ - static_cast<std::size_t>(offset));
+        std::vector<std::byte> result(available);
+        for (std::size_t index = 0; index < available; ++index) {
+            result[index] = static_cast<std::byte>(((offset + index) * 3U) % 251U);
+        }
+        return result;
+    }
+
+private:
+    std::string path_;
+    std::size_t size_{};
+};
+
 void expect(bool condition, const std::string& message) {
     if (!condition) {
         throw std::runtime_error(message);
     }
+}
+
+std::size_t open_fd_count() {
+    DIR* directory = ::opendir("/proc/self/fd");
+    expect(directory != nullptr, "open fd directory should be available");
+    std::size_t count = 0;
+    while (::readdir(directory) != nullptr) {
+        ++count;
+    }
+    ::closedir(directory);
+    return count;
 }
 
 void expect_result(const intentio::ReadResult& result,
@@ -797,6 +884,159 @@ void test_kernel_io_intent() {
            "conflicting intents on one fd should retain separate policies");
 }
 
+void test_managed_file_and_direct_io() {
+    ManagedTestFile backing(512U * 1024U + 123U);
+    const intentio::FileCapabilities capabilities =
+        intentio::File::open(backing.path()).capabilities();
+    if (capabilities.direct_io_supported) {
+        expect(capabilities.memory_alignment != 0 &&
+                   capabilities.offset_alignment != 0 &&
+                   capabilities.read_offset_alignment != 0,
+               "supported direct I/O should expose alignments");
+    }
+
+    std::error_code allocation_error;
+    auto aligned = intentio::detail::AlignedBuffer::allocate(
+        4096,
+        512,
+        allocation_error);
+    expect(aligned.data() != nullptr &&
+               reinterpret_cast<std::uintptr_t>(aligned.data()) % 512U == 0U,
+           "aligned buffer should satisfy the requested alignment");
+    auto moved_aligned = std::move(aligned);
+    expect(aligned.data() == nullptr && moved_aligned.data() != nullptr,
+           "aligned buffer move should transfer ownership");
+
+    intentio::Submission lifetime_submission;
+    {
+        intentio::RuntimeOptions options;
+        options.backend = intentio::Backend::ThreadedPread;
+        options.threaded_worker_count = 2;
+        options.execution.max_in_flight = 2;
+        options.coalescing.enabled = false;
+        intentio::Runtime runtime(options);
+        intentio::File managed = intentio::File::open(backing.path());
+        auto group = runtime.create_group();
+        group.read(managed, 0, 4096);
+        group.io_cache_mode(intentio::IOCacheMode::Buffered);
+        lifetime_submission = runtime.submit(group);
+        managed = intentio::File::open(backing.path());
+    }
+    const auto lifetime_results = lifetime_submission.get();
+    expect_result(lifetime_results.front(), backing.expected(0, 4096),
+                  "managed file lifetime");
+
+    intentio::File managed = intentio::File::open(backing.path());
+    expect(managed.valid(), "managed file should be valid after open");
+    intentio::File moved_file = std::move(managed);
+    expect(!managed.valid() && moved_file.valid(),
+           "managed file move should transfer ownership");
+
+    intentio::RuntimeOptions options;
+    options.backend = intentio::Backend::ThreadedPread;
+    options.threaded_worker_count = 2;
+    options.execution.max_in_flight = 2;
+    options.coalescing.enabled = false;
+
+    intentio::Runtime buffered_runtime(options);
+    auto buffered_group = buffered_runtime.create_group();
+    buffered_group.read(moved_file, 4096, 4096);
+    buffered_group.io_cache_mode(intentio::IOCacheMode::Buffered);
+    const auto buffered_results = buffered_group.submit();
+    expect_result(buffered_results.front(), backing.expected(4096, 4096),
+                  "managed buffered read");
+    expect(buffered_runtime.metrics().managed_file_reads == 1,
+           "managed buffered reads should be counted");
+
+    intentio::RuntimeOptions threshold_options = options;
+    threshold_options.kernel_io.auto_direct_threshold_bytes = 1;
+    intentio::Runtime threshold_runtime(threshold_options);
+    auto threshold_group = threshold_runtime.create_group();
+    threshold_group.read(moved_file, 123, 4096);
+    threshold_group.io_cache_mode(intentio::IOCacheMode::Auto);
+    const auto threshold_results = threshold_group.submit();
+    expect_result(threshold_results.front(), backing.expected(123, 4096),
+                  "automatic direct alignment fallback");
+    expect(threshold_runtime.metrics().auto_selected_direct == 1 &&
+               threshold_runtime.metrics().direct_reads_attempted == 1 &&
+               threshold_runtime.metrics().buffered_reads == 1,
+           "automatic direct candidates should fall back to buffered I/O");
+
+    intentio::Runtime direct_runtime(options);
+    auto direct_group = direct_runtime.create_group();
+    direct_group.read(moved_file, 4096, 4096);
+    direct_group.io_cache_mode(intentio::IOCacheMode::Direct);
+    const auto direct_results = direct_group.submit();
+    if (moved_file.capabilities().direct_io_supported) {
+        expect_result(direct_results.front(), backing.expected(4096, 4096),
+                      "managed direct read");
+        expect(direct_runtime.metrics().direct_reads_succeeded == 1,
+               "eligible direct read should be counted as successful");
+
+        intentio::Runtime concurrent_runtime(options);
+        std::vector<intentio::Submission> submissions;
+        for (std::size_t index = 0; index < 4; ++index) {
+            auto group = concurrent_runtime.create_group();
+            group.read(moved_file, index * 4096U, 4096);
+            group.io_cache_mode(intentio::IOCacheMode::Direct);
+            submissions.push_back(concurrent_runtime.submit(group));
+        }
+        for (std::size_t index = 0; index < submissions.size(); ++index) {
+            const auto results = submissions[index].get();
+            expect_result(results.front(), backing.expected(index * 4096U, 4096),
+                          "concurrent managed direct read");
+        }
+    } else {
+        expect(!direct_results.front().ok(),
+               "explicit direct mode should report unavailable direct I/O");
+        expect(direct_runtime.metrics().direct_unsupported == 1,
+               "unsupported direct I/O should be counted");
+    }
+
+    intentio::Runtime alignment_runtime(options);
+    auto alignment_group = alignment_runtime.create_group();
+    alignment_group.read(moved_file, 123, 4096);
+    alignment_group.io_cache_mode(intentio::IOCacheMode::Direct);
+    const auto alignment_results = alignment_group.submit();
+    expect(!alignment_results.front().ok(),
+           "explicit direct mode should reject an unaligned offset");
+    if (moved_file.capabilities().direct_io_supported) {
+        expect(alignment_runtime.metrics().direct_alignment_fallbacks == 1,
+               "unaligned direct requests should be metricized");
+    }
+
+    const int borrowed_fd = ::open(backing.path().c_str(), O_RDONLY | O_CLOEXEC);
+    expect(borrowed_fd >= 0, "borrowed descriptor should open");
+    intentio::Runtime borrowed_runtime(options);
+    auto borrowed_group = borrowed_runtime.create_group();
+    borrowed_group.read(borrowed_fd, 0, 4096);
+    borrowed_group.io_cache_mode(intentio::IOCacheMode::Direct);
+    const auto borrowed_results = borrowed_group.submit();
+    ::close(borrowed_fd);
+    expect(!borrowed_results.front().ok(),
+           "direct mode must not mutate or use borrowed descriptors");
+    expect(borrowed_runtime.metrics().direct_unsupported == 1,
+           "borrowed direct requests should report unsupported ownership");
+
+    intentio::Runtime eof_runtime(options);
+    auto eof_group = eof_runtime.create_group();
+    eof_group.read(moved_file, 512U * 1024U, 4096);
+    eof_group.io_cache_mode(intentio::IOCacheMode::Direct);
+    const auto eof_results = eof_group.submit();
+    if (moved_file.capabilities().direct_io_supported) {
+        expect_result(eof_results.front(), backing.expected(512U * 1024U, 4096),
+                      "managed direct EOF read");
+    }
+
+    const std::size_t descriptors_before = open_fd_count();
+    for (std::size_t iteration = 0; iteration < 1000; ++iteration) {
+        intentio::File transient = intentio::File::open(backing.path());
+        expect(transient.valid(), "repeated managed file should remain valid");
+    }
+    expect(open_fd_count() == descriptors_before,
+           "repeated managed file opens should release descriptors");
+}
+
 void test_adaptive_concurrency() {
     TestFile file(131072);
     intentio::RuntimeOptions options;
@@ -964,6 +1204,7 @@ int main() {
         test_threaded_backend_correctness();
         test_threaded_randomized_differential();
         test_kernel_io_intent();
+        test_managed_file_and_direct_io();
         test_adaptive_concurrency();
         test_threaded_lifecycle();
         test_concurrent_submissions_and_error_isolation();

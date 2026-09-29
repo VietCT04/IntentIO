@@ -2,6 +2,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+
+namespace intentio::detail {
+struct FileState;
+}
 
 namespace intentio {
 
@@ -12,6 +17,7 @@ struct ReadRequest {
     int fd{-1};
     std::uint64_t offset{};
     std::size_t length{};
+    std::shared_ptr<detail::FileState> managed_file{};
 };
 
 } // namespace intentio

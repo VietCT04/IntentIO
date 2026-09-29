@@ -224,12 +224,28 @@ IoUringBackend::~IoUringBackend() {
 
 ExecutionStats IoUringBackend::execute(
     std::vector<PhysicalRead>& reads,
-    const intentio::ExecutionPolicy& policy) {
+    const intentio::ExecutionPolicy& policy,
+    const KernelIOPolicy& kernel_policy) {
     if (reads.empty()) {
         return {};
     }
     if (policy.max_in_flight == 0) {
         throw std::invalid_argument("execution max in-flight must be greater than zero");
+    }
+
+    if (kernel_policy.cache_policy == intentio::CachePolicy::Direct) {
+        ExecutionStats stats;
+        stats.completed = reads.size();
+        for (PhysicalRead& read : reads) {
+            if (read.request.managed_file) {
+                ++read.kernel_io_stats.managed_file_reads;
+            }
+            ++read.kernel_io_stats.direct_reads_attempted;
+            ++read.kernel_io_stats.direct_unsupported;
+            read.error = std::make_error_code(std::errc::operation_not_supported);
+            add_kernel_io_stats(stats.kernel_io, read.kernel_io_stats);
+        }
+        return stats;
     }
 
     const unsigned queue_depth = static_cast<unsigned>(std::min<std::size_t>(

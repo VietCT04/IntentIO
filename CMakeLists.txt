@@ -24,6 +24,7 @@ add_library(intentio STATIC
     src/backends/threaded_pread_backend.cpp
     src/concurrency.cpp
     src/execution_policy.cpp
+    src/file.cpp
     src/group.cpp
     src/kernel_io.cpp
     src/policy.cpp
@@ -94,6 +95,9 @@ if (INTENTIO_BUILD_BENCHMARKS)
 
     add_executable(intentio_phase9_benchmark benchmarks/intentio_phase9_bench.cpp)
     target_link_libraries(intentio_phase9_benchmark PRIVATE intentio)
+
+    add_executable(intentio_phase10_benchmark benchmarks/intentio_phase10_bench.cpp)
+    target_link_libraries(intentio_phase10_benchmark PRIVATE intentio)
 endif()
 
 if (INTENTIO_BUILD_EXAMPLES)

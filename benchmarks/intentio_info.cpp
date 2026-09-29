@@ -234,10 +234,15 @@ std::string probe_dontcache(int fd) {
 
 std::string probe_dioalign(const std::string& path) {
     struct statx info{};
+#ifdef STATX_DIO_READ_ALIGN
+    constexpr unsigned mask = STATX_DIOALIGN | STATX_DIO_READ_ALIGN;
+#else
+    constexpr unsigned mask = STATX_DIOALIGN;
+#endif
     if (::statx(AT_FDCWD,
                 path.c_str(),
                 AT_STATX_SYNC_AS_STAT,
-                STATX_DIOALIGN,
+                mask,
                 &info) != 0) {
         return std::string("unavailable errno=") + std::to_string(errno) +
                " (" + std::strerror(errno) + ")";
@@ -245,9 +250,45 @@ std::string probe_dioalign(const std::string& path) {
     if ((info.stx_mask & STATX_DIOALIGN) == 0U) {
         return "unavailable mask_missing";
     }
-    return "supported memory_alignment=" +
-           std::to_string(info.stx_dio_mem_align) +
-           " offset_alignment=" + std::to_string(info.stx_dio_offset_align);
+    std::string result = "supported memory_alignment=" +
+                         std::to_string(info.stx_dio_mem_align) +
+                         " offset_alignment=" +
+                         std::to_string(info.stx_dio_offset_align);
+#ifdef STATX_DIO_READ_ALIGN
+    if ((info.stx_mask & STATX_DIO_READ_ALIGN) != 0U) {
+        result += " read_offset_alignment=" +
+                  std::to_string(info.stx_dio_read_offset_align);
+    }
+#endif
+    return result;
+}
+
+std::string probe_direct_io(const std::string& path, int buffered_fd) {
+#ifdef O_DIRECT
+    struct stat buffered_stat{};
+    if (::fstat(buffered_fd, &buffered_stat) != 0) {
+        return std::string("supported=no status=fstat errno=") +
+               std::to_string(errno);
+    }
+    const int direct_fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_DIRECT);
+    if (direct_fd < 0) {
+        return std::string("supported=no status=open errno=") +
+               std::to_string(errno) + " (" + std::strerror(errno) + ")";
+    }
+    struct stat direct_stat{};
+    const bool same_identity = ::fstat(direct_fd, &direct_stat) == 0 &&
+                               buffered_stat.st_dev == direct_stat.st_dev &&
+                               buffered_stat.st_ino == direct_stat.st_ino;
+    ::close(direct_fd);
+    if (!same_identity) {
+        return "supported=no status=identity_mismatch";
+    }
+    return "supported=yes";
+#else
+    (void)path;
+    (void)buffered_fd;
+    return "supported=no status=O_DIRECT_unavailable";
+#endif
 }
 
 void print_bits(const char* label,
@@ -288,11 +329,16 @@ int main(int argc, char** argv) {
 
     ProbeFile probe_file = make_probe_file(path);
     if (probe_file.fd >= 0) {
+        std::cout << "managed_file_open=yes\n";
         std::cout << "rwf_dontcache=" << probe_dontcache(probe_file.fd) << '\n';
         std::cout << "statx_dioalign=" << probe_dioalign(probe_file.path) << '\n';
+        std::cout << "direct_io=" << probe_direct_io(probe_file.path, probe_file.fd)
+                  << '\n';
     } else {
+        std::cout << "managed_file_open=no\n";
         std::cout << "rwf_dontcache=unavailable (could not create probe file)\n";
         std::cout << "statx_dioalign=unavailable (could not create probe file)\n";
+        std::cout << "direct_io=unavailable (could not create probe file)\n";
     }
 
     constexpr unsigned requested_entries = 8U;

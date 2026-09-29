@@ -1,6 +1,7 @@
 #include "intentio/runtime.hpp"
 
 #include "detail/execution_policy.hpp"
+#include "detail/file_state.hpp"
 #include "detail/policy.hpp"
 #include "detail/runtime_state.hpp"
 
@@ -64,6 +65,16 @@ void add_kernel_metrics(MetricsSnapshot& metrics,
     metrics.buffered_reads += stats.buffered_reads;
     metrics.bytes_dontcache += stats.bytes_dontcache;
     metrics.bytes_buffered += stats.bytes_buffered;
+    metrics.managed_file_reads += stats.managed_file_reads;
+    metrics.direct_reads_attempted += stats.direct_reads_attempted;
+    metrics.direct_reads_succeeded += stats.direct_reads_succeeded;
+    metrics.direct_bytes += stats.direct_bytes;
+    metrics.direct_unsupported += stats.direct_unsupported;
+    metrics.direct_alignment_fallbacks += stats.direct_alignment_fallbacks;
+    metrics.direct_open_failures += stats.direct_open_failures;
+    metrics.auto_selected_buffered += stats.auto_selected_buffered;
+    metrics.auto_selected_dontcache += stats.auto_selected_dontcache;
+    metrics.auto_selected_direct += stats.auto_selected_direct;
 }
 
 } // namespace
@@ -190,8 +201,74 @@ std::shared_ptr<SubmissionState> RuntimeState::submit_async(
                   << file_advice_name(submission->kernel_io_policy.access_advice)
                   << " cache="
                   << cache_policy_name(submission->kernel_io_policy.cache_policy)
-                  << "\n"
-                  << submission->plan.trace;
+                  << "\n";
+        for (std::size_t index = 0; index < submission->plan.requests.size();
+             ++index) {
+            const PhysicalRequest& request = submission->plan.requests[index];
+            const bool direct_candidate =
+                submission->kernel_io_policy.cache_policy ==
+                    intentio::CachePolicy::Direct ||
+                (submission->kernel_io_policy.requested_mode ==
+                     intentio::IOCacheMode::Auto &&
+                 submission->kernel_io_policy.auto_direct_threshold_bytes != 0 &&
+                 request.managed_file &&
+                 request.length >=
+                     submission->kernel_io_policy.auto_direct_threshold_bytes);
+            bool direct_eligible = false;
+            const char* direct_rejection = "not requested";
+            if (direct_candidate) {
+                direct_rejection = "managed File required";
+                if (request.managed_file &&
+                    request.managed_file->capabilities.direct_io_supported) {
+                    direct_rejection = "offset/length alignment";
+                    direct_eligible =
+                        request.offset %
+                                request.managed_file->capabilities
+                                    .read_offset_alignment ==
+                            0 &&
+                        request.length %
+                                request.managed_file->capabilities.offset_alignment ==
+                            0;
+                    if (direct_eligible) {
+                        direct_rejection = "none";
+                    }
+                } else if (request.managed_file) {
+                    direct_rejection = "direct I/O unsupported";
+                }
+            }
+            const intentio::CachePolicy effective_policy =
+                direct_candidate && direct_eligible
+                    ? intentio::CachePolicy::Direct
+                    : (direct_candidate &&
+                               submission->kernel_io_policy.requested_mode ==
+                                   intentio::IOCacheMode::Auto
+                           ? submission->kernel_io_policy.cache_policy
+                           : submission->kernel_io_policy.cache_policy);
+            std::clog << "  Physical request #" << index << "\n"
+                      << "    File: managed=" << (request.managed_file ? "yes" : "no");
+            if (request.managed_file) {
+                const auto& capabilities = request.managed_file->capabilities;
+                std::clog << " direct_supported="
+                          << (capabilities.direct_io_supported ? "yes" : "no")
+                          << " memory=" << capabilities.memory_alignment
+                          << " offset=" << capabilities.offset_alignment
+                          << " read_offset="
+                          << capabilities.read_offset_alignment;
+            }
+            std::clog << "\n"
+                      << "    Planner: offset=" << request.offset
+                      << " length=" << request.length << "\n"
+                      << "    Cache mechanism: "
+                      << cache_policy_name(effective_policy) << "\n"
+                      << "    Direct candidate: "
+                      << (direct_candidate ? "yes" : "no") << "\n"
+                      << "    Eligibility: "
+                      << (direct_candidate ? (direct_eligible ? "yes" : "no")
+                                            : "not-requested")
+                      << "\n"
+                      << "    Rejection reason: " << direct_rejection << "\n";
+        }
+        std::clog << submission->plan.trace;
     }
 
     {
@@ -255,7 +332,9 @@ std::shared_ptr<SubmissionState> RuntimeState::submit_async(
     std::lock_guard backend_lock(blocking_backend_mutex);
     ExecutionStats stats;
     if (selected_backend == Backend::IoUring) {
-        stats = io_uring_backend->execute(submission->reads, execution_policy);
+        stats = io_uring_backend->execute(submission->reads,
+                                          execution_policy,
+                                          submission->kernel_io_policy);
         submission->completed = stats.completed;
         submission->peak_in_flight = stats.peak_in_flight;
         submission->elapsed_ns = stats.elapsed_ns;
@@ -385,6 +464,21 @@ MetricsSnapshot RuntimeState::metrics_snapshot() const {
         snapshot.buffered_reads = executor.kernel_io.buffered_reads;
         snapshot.bytes_dontcache = executor.kernel_io.bytes_dontcache;
         snapshot.bytes_buffered = executor.kernel_io.bytes_buffered;
+        snapshot.managed_file_reads = executor.kernel_io.managed_file_reads;
+        snapshot.direct_reads_attempted =
+            executor.kernel_io.direct_reads_attempted;
+        snapshot.direct_reads_succeeded =
+            executor.kernel_io.direct_reads_succeeded;
+        snapshot.direct_bytes = executor.kernel_io.direct_bytes;
+        snapshot.direct_unsupported = executor.kernel_io.direct_unsupported;
+        snapshot.direct_alignment_fallbacks =
+            executor.kernel_io.direct_alignment_fallbacks;
+        snapshot.direct_open_failures = executor.kernel_io.direct_open_failures;
+        snapshot.auto_selected_buffered =
+            executor.kernel_io.auto_selected_buffered;
+        snapshot.auto_selected_dontcache =
+            executor.kernel_io.auto_selected_dontcache;
+        snapshot.auto_selected_direct = executor.kernel_io.auto_selected_direct;
     }
     return snapshot;
 }

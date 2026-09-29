@@ -58,6 +58,16 @@ struct MetricsSnapshot {
     std::uint64_t buffered_reads{};
     std::uint64_t bytes_dontcache{};
     std::uint64_t bytes_buffered{};
+    std::uint64_t managed_file_reads{};
+    std::uint64_t direct_reads_attempted{};
+    std::uint64_t direct_reads_succeeded{};
+    std::uint64_t direct_bytes{};
+    std::uint64_t direct_unsupported{};
+    std::uint64_t direct_alignment_fallbacks{};
+    std::uint64_t direct_open_failures{};
+    std::uint64_t auto_selected_buffered{};
+    std::uint64_t auto_selected_dontcache{};
+    std::uint64_t auto_selected_direct{};
 };
 
 } // namespace intentio

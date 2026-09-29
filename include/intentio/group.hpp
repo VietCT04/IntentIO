@@ -1,6 +1,7 @@
 #pragma once
 
 #include "hints.hpp"
+#include "file.hpp"
 #include "request.hpp"
 #include "result.hpp"
 
@@ -23,12 +24,16 @@ public:
     ~Group();
 
     RequestId read(int fd, std::uint64_t offset, std::size_t length);
+    RequestId read(const File& file,
+                   std::uint64_t offset,
+                   std::size_t length);
 
     void hint(AccessPattern pattern) noexcept;
     void access_pattern(AccessPattern pattern) noexcept { hint(pattern); }
     void hint(ReuseHint hint) noexcept;
     void reuse_hint(ReuseHint hint) noexcept { this->hint(hint); }
     void latency_class(LatencyClass latency) noexcept;
+    void io_cache_mode(IOCacheMode mode) noexcept;
 
     [[nodiscard]] const GroupHints& hints() const noexcept { return hints_; }
     [[nodiscard]] std::size_t size() const noexcept { return requests_.size(); }
