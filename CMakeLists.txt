@@ -20,6 +20,7 @@ add_library(intentio STATIC
     src/backends/io_uring_backend.cpp
     src/backends/sync_backend.cpp
     src/group.cpp
+    src/policy.cpp
     src/planner.cpp
     src/runtime.cpp
 )
@@ -63,6 +64,16 @@ endif()
 if (INTENTIO_BUILD_BENCHMARKS)
     add_executable(intentio_benchmark benchmarks/intentio_bench.cpp)
     target_link_libraries(intentio_benchmark PRIVATE intentio)
+
+    add_executable(intentio_phase4_benchmark benchmarks/intentio_phase4_bench.cpp)
+    target_link_libraries(intentio_phase4_benchmark PRIVATE intentio)
+
+    add_executable(intentio_planner_benchmark benchmarks/planner_bench.cpp)
+    target_link_libraries(intentio_planner_benchmark PRIVATE intentio)
+    target_include_directories(intentio_planner_benchmark PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+    add_executable(intentio_phase5_benchmark benchmarks/intentio_phase5_bench.cpp)
+    target_link_libraries(intentio_phase5_benchmark PRIVATE intentio)
 endif()
 
 if (INTENTIO_BUILD_EXAMPLES)

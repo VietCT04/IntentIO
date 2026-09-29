@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+
 namespace intentio {
 
 enum class AccessPattern {
@@ -14,19 +17,25 @@ enum class ReuseHint {
     ScanOnce,
 };
 
+// Kept for source compatibility with the original public vocabulary. Phase 5
+// intentionally resolves only the access, reuse, and latency hints above.
 enum class Priority {
     Low,
     Normal,
     High,
 };
 
-// ReuseHint and Priority are defined now so the public vocabulary does not
-// need to change when their planner/executor policies arrive. The initial
-// release intentionally only applies AccessPattern.
+enum class LatencyClass {
+    Default,
+    LatencySensitive,
+    Throughput,
+};
+
 struct GroupHints {
     AccessPattern access_pattern{AccessPattern::Unknown};
     ReuseHint reuse_hint{ReuseHint::Unknown};
     Priority priority{Priority::Normal};
+    LatencyClass latency_class{LatencyClass::Default};
 };
 
 } // namespace intentio

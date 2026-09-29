@@ -32,6 +32,14 @@ void Group::hint(AccessPattern pattern) noexcept {
     hints_.access_pattern = pattern;
 }
 
+void Group::hint(ReuseHint hint) noexcept {
+    hints_.reuse_hint = hint;
+}
+
+void Group::latency_class(LatencyClass latency) noexcept {
+    hints_.latency_class = latency;
+}
+
 std::vector<ReadResult> Group::submit() {
     if (submitted_) {
         throw std::logic_error("Group::submit may only be called once");

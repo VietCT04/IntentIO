@@ -27,6 +27,7 @@ struct RuntimeState {
     SyncBackend sync_backend;
     std::unique_ptr<IoUringBackend> io_uring_backend;
     MetricsSnapshot metrics{};
+    bool trace_plan{false};
     mutable std::mutex mutex;
 };
 

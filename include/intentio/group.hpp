@@ -24,11 +24,11 @@ public:
 
     RequestId read(int fd, std::uint64_t offset, std::size_t length);
 
-    // AccessPattern is consumed by the planner. Reuse and priority policies
-    // are intentionally not exposed as mutators until they have execution
-    // semantics in a later milestone.
     void hint(AccessPattern pattern) noexcept;
     void access_pattern(AccessPattern pattern) noexcept { hint(pattern); }
+    void hint(ReuseHint hint) noexcept;
+    void reuse_hint(ReuseHint hint) noexcept { this->hint(hint); }
+    void latency_class(LatencyClass latency) noexcept;
 
     [[nodiscard]] const GroupHints& hints() const noexcept { return hints_; }
     [[nodiscard]] std::size_t size() const noexcept { return requests_.size(); }

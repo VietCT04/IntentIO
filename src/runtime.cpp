@@ -1,19 +1,66 @@
 #include "intentio/runtime.hpp"
 
+#include "detail/policy.hpp"
 #include "detail/runtime_state.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdint>
+#include <iostream>
 #include <stdexcept>
 #include <system_error>
 
 namespace intentio::detail {
+
+namespace {
+
+const char* access_pattern_name(AccessPattern pattern) {
+    switch (pattern) {
+    case AccessPattern::Unknown:
+        return "Unknown";
+    case AccessPattern::Sequential:
+        return "Sequential";
+    case AccessPattern::Random:
+        return "Random";
+    }
+    return "Unknown";
+}
+
+const char* reuse_hint_name(ReuseHint hint) {
+    switch (hint) {
+    case ReuseHint::Unknown:
+        return "Unknown";
+    case ReuseHint::ReuseLikely:
+        return "ReuseLikely";
+    case ReuseHint::ScanOnce:
+        return "ScanOnce";
+    }
+    return "Unknown";
+}
+
+const char* latency_class_name(LatencyClass latency) {
+    switch (latency) {
+    case LatencyClass::Default:
+        return "Default";
+    case LatencyClass::LatencySensitive:
+        return "LatencySensitive";
+    case LatencyClass::Throughput:
+        return "Throughput";
+    }
+    return "Default";
+}
+
+} // namespace
 
 RuntimeState::RuntimeState(const RuntimeOptions& requested_options)
     : options(requested_options), selected_backend(Backend::Synchronous) {
     if (options.queue_depth == 0) {
         throw std::invalid_argument("IntentIO queue depth must be greater than zero");
     }
+    const char* trace_environment = std::getenv("INTENTIO_TRACE_PLAN");
+    trace_plan = options.trace_plan;
+    trace_plan = trace_plan ||
+                 (trace_environment != nullptr && trace_environment[0] == '1');
 
     switch (options.backend) {
     case Backend::Synchronous:
@@ -41,6 +88,8 @@ std::vector<ReadResult> RuntimeState::submit(
     const GroupHints& hints) {
     std::lock_guard lock(mutex);
 
+    const PlanningPolicy policy = resolve_policy(options, hints);
+
     std::vector<ReadResult> results;
     results.reserve(requests.size());
     for (const ReadRequest& request : requests) {
@@ -55,12 +104,26 @@ std::vector<ReadResult> RuntimeState::submit(
 
     const PhysicalPlan plan = plan_reads(
         requests,
-        hints,
-        PlannerOptions{
-            options.coalescing.enabled,
-            options.coalescing.max_gap_bytes,
-            options.coalescing.max_request_bytes,
-        });
+        policy,
+        PlannerOptions{trace_plan});
+
+    if (trace_plan) {
+        std::clog << "IntentIO plan\n"
+                  << "  Intent: access_pattern="
+                  << access_pattern_name(hints.access_pattern)
+                  << " reuse_hint=" << reuse_hint_name(hints.reuse_hint)
+                  << " latency_class=" << latency_class_name(hints.latency_class)
+                  << "\n"
+                  << "  Resolved policy: max_merge_gap="
+                  << policy.max_merge_gap_bytes
+                  << " max_merged_size=" << policy.max_merged_size_bytes
+                  << " max_read_amplification="
+                  << policy.max_read_amplification
+                  << " enable_coalescing=" << policy.enable_coalescing
+                  << " enable_deduplication=" << policy.enable_deduplication
+                  << "\n"
+                  << plan.trace;
+    }
 
     std::vector<PhysicalRead> reads;
     reads.reserve(plan.requests.size());
@@ -101,15 +164,40 @@ std::vector<ReadResult> RuntimeState::submit(
     for (const ReadRequest& request : requests) {
         metrics.logical_bytes += request.length;
     }
+    metrics.unique_logical_bytes += plan.unique_logical_bytes;
     metrics.physical_reads += plan.requests.size();
     for (const PhysicalRequest& request : plan.requests) {
         metrics.physical_bytes += request.length;
-        if (request.slices.size() > 1) {
-            const auto saved = static_cast<std::uint64_t>(request.slices.size() - 1);
-            metrics.requests_merged += saved;
-            metrics.merge_saved_operations += saved;
-        }
     }
+    metrics.requests_merged += plan.requests_merged;
+    metrics.merge_saved_operations += plan.merge_saved_operations;
+    metrics.requests_deduplicated += plan.requests_deduplicated;
+    metrics.physical_reads_avoided_by_dedup +=
+        plan.physical_reads_avoided_by_dedup;
+    metrics.bytes_avoided_by_dedup += plan.bytes_avoided_by_dedup;
+    metrics.merge_candidates += plan.merge_candidates;
+    metrics.merges_accepted += plan.merges_accepted;
+    metrics.merges_rejected += plan.merges_rejected;
+    metrics.merges_rejected_amplification +=
+        plan.merges_rejected_amplification;
+    metrics.merges_rejected_size += plan.merges_rejected_size;
+    metrics.merges_rejected_gap += plan.merges_rejected_gap;
+    metrics.merges_rejected_policy += plan.merges_rejected_policy;
+    if (hints.access_pattern == AccessPattern::Sequential) {
+        ++metrics.intent_sequential_groups;
+    } else if (hints.access_pattern == AccessPattern::Random) {
+        ++metrics.intent_random_groups;
+    }
+    if (hints.latency_class == LatencyClass::LatencySensitive) {
+        ++metrics.latency_sensitive_groups;
+    } else if (hints.latency_class == LatencyClass::Throughput) {
+        ++metrics.throughput_groups;
+    }
+    metrics.read_amplification =
+        metrics.unique_logical_bytes == 0
+            ? 0.0
+            : static_cast<double>(metrics.physical_bytes) /
+                  static_cast<double>(metrics.unique_logical_bytes);
 
     return results;
 }
