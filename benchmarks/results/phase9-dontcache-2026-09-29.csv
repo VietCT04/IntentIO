@@ -1,0 +1,17 @@
+mode,policy,workload,status,kernel,filesystem,file_state,cache_state,workers,qd,requests,request_size,wall_ms,tasks_per_sec,p50_ms,p95_ms,p99_ms,cpu_seconds,minor_faults,major_faults,logical_reads,physical_reads,kernel_advice_sequential,kernel_advice_random,kernel_advice_noreuse,kernel_advice_failures,dontcache_attempted,dontcache_succeeded,dontcache_unsupported,dontcache_fallbacks,buffered_reads,bytes_dontcache,bytes_buffered,hot_p50_before_ms,hot_p50_after_ms,hot_residency_before,hot_residency_after
+scan,baseline,random4k,OK,7.0.0-31-generic,0xef53,materialized,warm-buffered,16,16,128,4096,4.006,31954.425,1.806,3.577,3.796,0.032,291,0,128,128,0,0,0,0,0,0,0,0,128,0,524288,0,0,0,0
+scan,random,random4k,OK,7.0.0-31-generic,0xef53,materialized,warm-buffered,16,16,128,4096,4.384,29199.398,1.903,4.023,4.226,0.033,295,0,128,128,0,128,0,0,0,0,0,0,128,0,524288,0,0,0,0
+scan,noreuse,random4k,OK,7.0.0-31-generic,0xef53,materialized,warm-buffered,16,16,128,4096,5.814,22016.180,2.688,5.289,5.443,0.037,293,0,128,128,0,0,128,0,0,0,0,0,128,0,524288,0,0,0,0
+scan,dontcache,random4k,OK,7.0.0-31-generic,0xef53,materialized,warm-buffered,16,16,128,4096,5.006,25568.285,2.477,4.654,4.752,0.037,134,0,128,128,0,0,0,0,128,128,0,0,0,524288,0,0,0,0,0
+scan,baseline,random64k,OK,7.0.0-31-generic,0xef53,materialized,warm-buffered,16,16,128,65536,10.724,11936.350,4.499,9.335,9.806,0.056,4144,0,128,128,0,0,0,0,0,0,0,0,128,0,8388608,0,0,0,0
+scan,random,random64k,OK,7.0.0-31-generic,0xef53,materialized,warm-buffered,16,16,128,65536,13.105,9766.914,6.663,11.688,11.972,0.066,4146,0,128,128,0,128,0,0,0,0,0,0,128,0,8388608,0,0,0,0
+scan,noreuse,random64k,OK,7.0.0-31-generic,0xef53,materialized,warm-buffered,16,16,128,65536,11.903,10753.508,5.988,10.065,10.499,0.057,4156,0,128,128,0,0,128,0,0,0,0,0,128,0,8388608,0,0,0,0
+scan,dontcache,random64k,OK,7.0.0-31-generic,0xef53,materialized,warm-buffered,16,16,128,65536,9.158,13976.665,5.042,7.696,7.742,0.045,3893,0,128,128,0,0,0,0,128,128,0,0,0,8388608,0,0,0,0,0
+scan,baseline,mixed,OK,7.0.0-31-generic,0xef53,materialized,warm-buffered,16,16,128,1048576,26.874,4763.016,17.761,22.442,22.830,0.092,17832,0,128,128,0,0,0,0,0,0,0,0,128,0,35913728,0,0,0,0
+scan,random,mixed,OK,7.0.0-31-generic,0xef53,materialized,warm-buffered,16,16,128,1048576,25.298,5059.783,16.312,21.117,21.412,0.088,17830,0,128,128,0,128,0,0,0,0,0,0,128,0,35913728,0,0,0,0
+scan,noreuse,mixed,OK,7.0.0-31-generic,0xef53,materialized,warm-buffered,16,16,128,1048576,24.505,5223.510,15.357,19.944,20.616,0.091,17832,0,128,128,0,0,128,0,0,0,0,0,128,0,35913728,0,0,0,0
+scan,dontcache,mixed,OK,7.0.0-31-generic,0xef53,materialized,warm-buffered,16,16,128,1048576,25.161,5087.331,16.446,21.190,21.383,0.089,17573,0,128,128,0,0,0,0,128,128,0,0,0,35913728,0,0,0,0,0
+scan,baseline,sequential,OK,7.0.0-31-generic,0xef53,materialized,warm-buffered,16,16,128,1048576,89.771,1425.847,43.307,73.443,75.715,0.268,65825,0,128,128,0,0,0,0,0,0,0,0,128,0,134217728,0,0,0,0
+scan,random,sequential,OK,7.0.0-31-generic,0xef53,materialized,warm-buffered,16,16,128,1048576,86.740,1475.666,42.079,68.562,72.715,0.274,65826,0,128,128,0,128,0,0,0,0,0,0,128,0,134217728,0,0,0,0
+scan,noreuse,sequential,OK,7.0.0-31-generic,0xef53,materialized,warm-buffered,16,16,128,1048576,85.034,1505.273,41.509,67.976,70.393,0.269,65830,0,128,128,0,0,128,0,0,0,0,0,128,0,134217728,0,0,0,0
+scan,dontcache,sequential,OK,7.0.0-31-generic,0xef53,materialized,warm-buffered,16,16,128,1048576,93.989,1361.868,43.756,78.834,81.236,0.284,65579,0,128,128,0,0,0,0,128,128,0,0,0,134217728,0,0,0,0,0

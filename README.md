@@ -101,6 +101,9 @@ Group C ----┘                    |
                             +-----+-----+
                             |           |
                      threaded pread  io_uring
+                            |
+                    KernelIOPolicy
+                 fadvise / RWF_DONTCACHE
 ```
 
 Planning determines what physical I/O exists, scheduling determines which
@@ -140,9 +143,12 @@ read when deduplication is enabled. Adjacent and small-gap ranges are handled
 by the separate coalescing policy. `max_request_bytes` limits both union and
 coalescing growth, so distant requests cannot become one pathological read.
 
-Intent is advisory. The resolved policy always enforces a maximum merged size
-and read-amplification budget. Use `INTENTIO_TRACE_PLAN=1` or
-`RuntimeOptions::trace_plan` to print the selected policy and merge decisions.
+Intent is advisory. The resolved planning policy always enforces a maximum
+merged size and read-amplification budget. A separate `KernelIOPolicy` maps
+access and reuse intent to `posix_fadvise` and, for scan-once reads,
+`RWF_DONTCACHE` when enabled. Kernel hints do not change the requested bytes
+or mutate arbitrary borrowed file descriptors. Use `INTENTIO_TRACE_PLAN=1` or
+`RuntimeOptions::trace_plan` to print both policies and the merge decisions.
 
 `Group::submit()` remains a blocking compatibility API. For concurrent
 application work, submit several groups through one runtime and wait on their
@@ -180,8 +186,10 @@ container returns `EPERM` from `io_uring_setup`; `Backend::Auto` therefore uses
 threaded `pread` here. The adaptive controller is deliberately conservative
 and is not expected to improve every workload.
 
-Planned: intent-driven cache policy, prefetching, O_DIRECT policy, zero-copy
-result storage, and coroutine APIs.
+Planned: prefetching, O_DIRECT policy, zero-copy result storage, and coroutine
+APIs. The Phase 9 kernel-I/O policy is implemented for the synchronous and
+threaded-`pread` paths; native io_uring remains unvalidated on hosts that
+reject `io_uring_setup`.
 
 ## Benchmarks
 
@@ -208,6 +216,12 @@ Build the benchmark target and run, for example:
 ./build/intentio_phase7_benchmark --mode fairness --workers 8 --qd 8
 ./build/intentio_planner_benchmark
 ./build/intentio-info .
+./build/intentio_phase9_benchmark --mode scan --policy sequential \
+  --workload sequential --materialize-file
+./build/intentio_phase9_benchmark --mode scan --policy dontcache \
+  --workload random4k --materialize-file
+./build/intentio_phase9_benchmark --mode cache-pollution --hot-mib 4 \
+  --scan-mib 64 --materialize-file
 
 # On a normal Linux host, collect the full matrix and environment metadata.
 ./scripts/run_host_benchmarks.sh
@@ -236,6 +250,16 @@ benchmark script then skips native io_uring matrices rather than recording
 threaded fallback as io_uring. Phase 8 capability and decision notes live in
 [`EXP-008`](docs/experiments/EXP-008-io-uring.md).
 
+The Phase 9 benchmark isolates kernel-visible intent from planning by disabling
+coalescing and deduplication. It compares baseline, sequential, random,
+NOREUSE, and `RWF_DONTCACHE` scans, and records advice calls, DONTCACHE
+successes/fallbacks, buffered bytes, CPU time, page faults, and queue-depth
+latencies. `intentio-info` also reports the local `RWF_DONTCACHE` probe and
+`STATX_DIOALIGN` values. O_DIRECT is only measured as a capability boundary in
+the experiment; IntentIO does not yet open files with O_DIRECT or alter
+arbitrary caller-owned descriptors. Phase 9 results and interpretation live in
+[`EXP-009`](docs/experiments/EXP-009-kernel-io-intent.md).
+
 ## Current limitations
 
 - `Group::submit()` is still blocking; `Runtime::submit(Group&)` is the
@@ -245,7 +269,8 @@ threaded fallback as io_uring. Phase 8 capability and decision notes live in
   all groups, not once per group. Latency-sensitive work receives bounded
   priority bursts and cannot permanently starve normal work.
 - Prefetching, userspace caching, direct-I/O policy, zero-copy result storage,
-  and coroutine APIs are not implemented.
+  and coroutine APIs are not implemented. Kernel cache hints are opt-in through
+  application intent and are not a universal performance guarantee.
 - The io_uring backend is intentionally small and uses one runtime-owned ring;
   multi-group scheduling is validated here on threaded `pread` because this
   environment rejects io_uring setup.

@@ -233,6 +233,9 @@ void ThreadedPreadBackend::finish_tasks(
             --task.submission->in_flight;
             ++task.submission->completed;
             task.submission->total_latency_ns += latency_ns;
+            add_kernel_io_stats(
+                kernel_io_,
+                task.submission->reads[task.index].kernel_io_stats);
             ++tasks_completed_;
             queue_wait_ns_ += now_ns() - task.available_at_ns - latency_ns;
             execution_ns_ += latency_ns;
@@ -293,7 +296,8 @@ void ThreadedPreadBackend::worker_loop() {
 
         for (const Task& task : tasks) {
             const std::uint64_t start = now_ns();
-            execute_pread(task.submission->reads[task.index]);
+            execute_pread(task.submission->reads[task.index],
+                          task.submission->kernel_io_policy);
             const std::uint64_t stop = now_ns();
             latencies_ns.push_back(stop - start);
         }
@@ -321,6 +325,7 @@ ExecutorMetricsSnapshot ThreadedPreadBackend::metrics() const noexcept {
         workers_idle_,
         max_queue_depth_,
         peak_in_flight_,
+        kernel_io_,
     };
 }
 

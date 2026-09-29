@@ -22,9 +22,10 @@ struct ExecutionStats {
     std::size_t peak_in_flight{};
     std::uint64_t elapsed_ns{};
     std::uint64_t total_latency_ns{};
+    KernelIOStats kernel_io{};
 };
 
-void execute_pread(PhysicalRead& read);
+void execute_pread(PhysicalRead& read, const KernelIOPolicy& policy);
 
 struct ExecutorMetricsSnapshot {
     std::uint64_t tasks_submitted{};
@@ -39,12 +40,14 @@ struct ExecutorMetricsSnapshot {
     std::uint64_t workers_idle{};
     std::uint64_t max_queue_depth{};
     std::uint64_t peak_in_flight{};
+    KernelIOStats kernel_io{};
 };
 
 class SyncBackend {
 public:
     ExecutionStats execute(std::vector<PhysicalRead>& reads,
-                           const intentio::ExecutionPolicy& policy) const;
+                           const intentio::ExecutionPolicy& policy,
+                           const KernelIOPolicy& kernel_policy) const;
 };
 
 class ThreadedPreadBackend {
@@ -100,6 +103,7 @@ private:
     std::uint64_t workers_idle_{};
     std::uint64_t max_queue_depth_{};
     std::uint64_t peak_in_flight_{};
+    KernelIOStats kernel_io_{};
 };
 
 class IoUringBackend {

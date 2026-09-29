@@ -47,6 +47,17 @@ struct MetricsSnapshot {
     std::uint64_t executor_workers_idle{};
     std::uint64_t executor_max_queue_depth{};
     std::uint64_t executor_peak_in_flight{};
+    std::uint64_t kernel_advice_sequential{};
+    std::uint64_t kernel_advice_random{};
+    std::uint64_t kernel_advice_noreuse{};
+    std::uint64_t kernel_advice_failures{};
+    std::uint64_t dontcache_reads_attempted{};
+    std::uint64_t dontcache_reads_succeeded{};
+    std::uint64_t dontcache_unsupported{};
+    std::uint64_t dontcache_fallbacks{};
+    std::uint64_t buffered_reads{};
+    std::uint64_t bytes_dontcache{};
+    std::uint64_t bytes_buffered{};
 };
 
 } // namespace intentio

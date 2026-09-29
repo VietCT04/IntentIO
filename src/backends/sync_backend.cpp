@@ -5,26 +5,69 @@
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <fcntl.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 namespace intentio::detail {
 
-void execute_pread(PhysicalRead& read) {
-    read.bytes_read = 0;
-    read.error = {};
-    if (read.request.length == 0) {
-        return;
-    }
+bool unsupported_dontcache_errno(int error) noexcept {
+    return error == EOPNOTSUPP || error == ENOTSUP;
+}
 
-    if (read.request.offset >
+void record_advice(PhysicalRead& read,
+                   const KernelIOPolicy& policy) {
+    if (policy.access_advice == intentio::FileAdvice::None ||
+        read.request.offset >
             static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()) ||
         read.request.length >
             static_cast<std::size_t>(std::numeric_limits<off_t>::max()) -
                 static_cast<std::size_t>(read.request.offset)) {
-        read.error = std::make_error_code(std::errc::value_too_large);
         return;
     }
 
+    int advice = POSIX_FADV_NORMAL;
+    switch (policy.access_advice) {
+    case intentio::FileAdvice::None:
+        return;
+    case intentio::FileAdvice::Sequential:
+        advice = POSIX_FADV_SEQUENTIAL;
+        break;
+    case intentio::FileAdvice::Random:
+        advice = POSIX_FADV_RANDOM;
+        break;
+    case intentio::FileAdvice::NoReuse:
+        advice = POSIX_FADV_NOREUSE;
+        break;
+    }
+
+    const int result = ::posix_fadvise(
+        read.request.fd,
+        static_cast<off_t>(read.request.offset),
+        static_cast<off_t>(read.request.length),
+        advice);
+    if (result != 0) {
+        ++read.kernel_io_stats.kernel_advice_failures;
+        return;
+    }
+    switch (policy.access_advice) {
+    case intentio::FileAdvice::None:
+        break;
+    case intentio::FileAdvice::Sequential:
+        ++read.kernel_io_stats.kernel_advice_sequential;
+        break;
+    case intentio::FileAdvice::Random:
+        ++read.kernel_io_stats.kernel_advice_random;
+        break;
+    case intentio::FileAdvice::NoReuse:
+        ++read.kernel_io_stats.kernel_advice_noreuse;
+        break;
+    }
+}
+
+void execute_buffered(PhysicalRead& read) {
+    ++read.kernel_io_stats.buffered_reads;
+    read.bytes_read = 0;
     std::size_t remaining = read.request.length;
     std::size_t completed = 0;
     while (remaining != 0) {
@@ -55,22 +98,106 @@ void execute_pread(PhysicalRead& read) {
         }
     }
     read.bytes_read = completed;
+    read.kernel_io_stats.bytes_buffered += completed;
+}
+
+bool execute_dontcache(PhysicalRead& read) {
+    ++read.kernel_io_stats.dontcache_reads_attempted;
+    read.bytes_read = 0;
+    std::size_t remaining = read.request.length;
+    std::size_t completed = 0;
+    bool successful = true;
+    while (remaining != 0) {
+        const std::size_t count =
+            remaining > static_cast<std::size_t>(SSIZE_MAX)
+                ? static_cast<std::size_t>(SSIZE_MAX)
+                : remaining;
+        iovec vector{
+            read.data.data() + completed,
+            count,
+        };
+        const auto offset = static_cast<off_t>(read.request.offset + completed);
+        const ssize_t result = ::preadv2(read.request.fd,
+                                          &vector,
+                                          1,
+                                          offset,
+                                          RWF_DONTCACHE);
+        if (result < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            if (completed == 0 && unsupported_dontcache_errno(errno)) {
+                return false;
+            }
+            read.error = std::error_code(errno, std::generic_category());
+            successful = false;
+            break;
+        }
+        if (result == 0) {
+            break;
+        }
+
+        completed += static_cast<std::size_t>(result);
+        remaining -= static_cast<std::size_t>(result);
+        if (static_cast<std::size_t>(result) < count) {
+            break;
+        }
+    }
+    read.bytes_read = completed;
+    if (successful) {
+        ++read.kernel_io_stats.dontcache_reads_succeeded;
+    }
+    read.kernel_io_stats.bytes_dontcache += completed;
+    return true;
+}
+
+void execute_pread(PhysicalRead& read, const KernelIOPolicy& policy) {
+    read.bytes_read = 0;
+    read.error = {};
+    read.kernel_io_stats = {};
+    if (read.request.length == 0) {
+        return;
+    }
+
+    if (read.request.offset >
+            static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()) ||
+        read.request.length >
+            static_cast<std::size_t>(std::numeric_limits<off_t>::max()) -
+                static_cast<std::size_t>(read.request.offset)) {
+        read.error = std::make_error_code(std::errc::value_too_large);
+        return;
+    }
+
+    record_advice(read, policy);
+    if (policy.cache_policy == intentio::CachePolicy::DontCache &&
+        execute_dontcache(read)) {
+        return;
+    }
+    if (policy.cache_policy == intentio::CachePolicy::DontCache) {
+        ++read.kernel_io_stats.dontcache_unsupported;
+        ++read.kernel_io_stats.dontcache_fallbacks;
+        read.error = {};
+        read.bytes_read = 0;
+    }
+    execute_buffered(read);
 }
 
 ExecutionStats SyncBackend::execute(
     std::vector<PhysicalRead>& reads,
-    const intentio::ExecutionPolicy& policy) const {
+    const intentio::ExecutionPolicy& policy,
+    const KernelIOPolicy& kernel_policy) const {
     (void)policy;
     ExecutionStats stats;
     const auto start = std::chrono::steady_clock::now();
     for (PhysicalRead& read : reads) {
         const auto operation_start = std::chrono::steady_clock::now();
-        execute_pread(read);
+        execute_pread(read, kernel_policy);
         const auto operation_stop = std::chrono::steady_clock::now();
         stats.total_latency_ns += static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 operation_stop - operation_start)
                 .count());
+        add_kernel_io_stats(stats.kernel_io, read.kernel_io_stats);
     }
     const auto stop = std::chrono::steady_clock::now();
     stats.completed = reads.size();

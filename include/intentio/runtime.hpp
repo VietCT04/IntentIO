@@ -4,6 +4,7 @@
 #include "metrics.hpp"
 #include "policy.hpp"
 #include "execution.hpp"
+#include "kernel_io.hpp"
 #include "submission.hpp"
 
 #include <cstddef>
@@ -38,6 +39,7 @@ struct RuntimeOptions {
     IntentPolicyOptions intent_policy{};
     ExecutionPolicy execution{};
     AdaptiveExecutionOptions adaptive_execution{};
+    KernelIOOptions kernel_io{};
     std::size_t threaded_worker_count{32};
     std::size_t executor_batch_size{1};
     bool trace_plan{false};

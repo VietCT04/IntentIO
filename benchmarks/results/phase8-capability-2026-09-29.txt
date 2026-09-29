@@ -4,6 +4,8 @@ storage_device=stat_dev=259:7 sysfs=../../devices/pci0000:00/0000:00:0e.0/pci100
 cpu_count=16
 memory_total=23765256 kB
 compiled setup flags: IOPOLL SQPOLL SQ_AFF CQSIZE CLAMP ATTACH_WQ R_DISABLED SUBMIT_ALL COOP_TASKRUN TASKRUN_FLAG SQE128 CQE32 SINGLE_ISSUER DEFER_TASKRUN NO_MMAP REGISTERED_FD_ONLY NO_SQARRAY HYBRID_IOPOLL CQE_MIXED SQE_MIXED SQ_REWIND
+rwf_dontcache=usable=yes bytes=4096
+statx_dioalign=supported memory_alignment=4 offset_alignment=512
 io_uring_available=no
 io_uring_setup_errno=1 (Operation not permitted)
 setup_features=unavailable

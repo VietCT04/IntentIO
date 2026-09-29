@@ -51,6 +51,21 @@ const char* latency_class_name(LatencyClass latency) {
     return "Default";
 }
 
+void add_kernel_metrics(MetricsSnapshot& metrics,
+                        const KernelIOStats& stats) noexcept {
+    metrics.kernel_advice_sequential += stats.kernel_advice_sequential;
+    metrics.kernel_advice_random += stats.kernel_advice_random;
+    metrics.kernel_advice_noreuse += stats.kernel_advice_noreuse;
+    metrics.kernel_advice_failures += stats.kernel_advice_failures;
+    metrics.dontcache_reads_attempted += stats.dontcache_reads_attempted;
+    metrics.dontcache_reads_succeeded += stats.dontcache_reads_succeeded;
+    metrics.dontcache_unsupported += stats.dontcache_unsupported;
+    metrics.dontcache_fallbacks += stats.dontcache_fallbacks;
+    metrics.buffered_reads += stats.buffered_reads;
+    metrics.bytes_dontcache += stats.bytes_dontcache;
+    metrics.bytes_buffered += stats.bytes_buffered;
+}
+
 } // namespace
 
 RuntimeState::RuntimeState(const RuntimeOptions& requested_options)
@@ -117,6 +132,8 @@ std::shared_ptr<SubmissionState> RuntimeState::submit_async(
 
     auto submission = std::make_shared<SubmissionState>();
     submission->hints = hints;
+    submission->kernel_io_policy =
+        resolve_kernel_io_policy(options.kernel_io, hints);
     submission->results.reserve(requests.size());
     for (const ReadRequest& request : requests) {
         submission->results.push_back(ReadResult{
@@ -168,6 +185,11 @@ std::shared_ptr<SubmissionState> RuntimeState::submit_async(
                   << "  Execution policy: max_in_flight="
                   << execution_policy.max_in_flight
                   << " adaptive=" << resolved_execution.adaptive_enabled
+                  << "\n"
+                  << "  Kernel I/O policy: advice="
+                  << file_advice_name(submission->kernel_io_policy.access_advice)
+                  << " cache="
+                  << cache_policy_name(submission->kernel_io_policy.cache_policy)
                   << "\n"
                   << submission->plan.trace;
     }
@@ -231,20 +253,25 @@ std::shared_ptr<SubmissionState> RuntimeState::submit_async(
     }
 
     std::lock_guard backend_lock(blocking_backend_mutex);
+    ExecutionStats stats;
     if (selected_backend == Backend::IoUring) {
-        const ExecutionStats stats =
-            io_uring_backend->execute(submission->reads, execution_policy);
+        stats = io_uring_backend->execute(submission->reads, execution_policy);
         submission->completed = stats.completed;
         submission->peak_in_flight = stats.peak_in_flight;
         submission->elapsed_ns = stats.elapsed_ns;
         submission->total_latency_ns = stats.total_latency_ns;
     } else {
-        const ExecutionStats stats =
-            sync_backend.execute(submission->reads, execution_policy);
+        stats = sync_backend.execute(submission->reads,
+                                     execution_policy,
+                                     submission->kernel_io_policy);
         submission->completed = stats.completed;
         submission->peak_in_flight = stats.peak_in_flight;
         submission->elapsed_ns = stats.elapsed_ns;
         submission->total_latency_ns = stats.total_latency_ns;
+    }
+    {
+        std::lock_guard metrics_lock(metrics_mutex);
+        add_kernel_metrics(metrics, stats.kernel_io);
     }
     for (std::size_t index = 0; index < submission->reads.size(); ++index) {
         const PhysicalRead& read = submission->reads[index];
@@ -344,6 +371,20 @@ MetricsSnapshot RuntimeState::metrics_snapshot() const {
         snapshot.executor_workers_idle = executor.workers_idle;
         snapshot.executor_max_queue_depth = executor.max_queue_depth;
         snapshot.executor_peak_in_flight = executor.peak_in_flight;
+        snapshot.kernel_advice_sequential =
+            executor.kernel_io.kernel_advice_sequential;
+        snapshot.kernel_advice_random = executor.kernel_io.kernel_advice_random;
+        snapshot.kernel_advice_noreuse = executor.kernel_io.kernel_advice_noreuse;
+        snapshot.kernel_advice_failures = executor.kernel_io.kernel_advice_failures;
+        snapshot.dontcache_reads_attempted =
+            executor.kernel_io.dontcache_reads_attempted;
+        snapshot.dontcache_reads_succeeded =
+            executor.kernel_io.dontcache_reads_succeeded;
+        snapshot.dontcache_unsupported = executor.kernel_io.dontcache_unsupported;
+        snapshot.dontcache_fallbacks = executor.kernel_io.dontcache_fallbacks;
+        snapshot.buffered_reads = executor.kernel_io.buffered_reads;
+        snapshot.bytes_dontcache = executor.kernel_io.bytes_dontcache;
+        snapshot.bytes_buffered = executor.kernel_io.bytes_buffered;
     }
     return snapshot;
 }

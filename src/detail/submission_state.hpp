@@ -1,6 +1,7 @@
 #pragma once
 
 #include "physical_read.hpp"
+#include "kernel_io.hpp"
 #include "intentio/hints.hpp"
 #include "intentio/result.hpp"
 
@@ -19,6 +20,7 @@ struct SubmissionState {
     std::vector<PhysicalRead> reads;
     std::vector<ReadResult> results;
     GroupHints hints{};
+    KernelIOPolicy kernel_io_policy{};
     std::size_t next_index{};
     std::size_t in_flight{};
     std::size_t completed{};

@@ -16,6 +16,10 @@ PHASE7_BATCH_RESULT_FILE="$RESULT_DIR/phase7-batch-host-$STAMP.csv"
 PHASE7_WORKLOAD_RESULT_FILE="$RESULT_DIR/phase7-workload-host-$STAMP.csv"
 PHASE7_FAIRNESS_RESULT_FILE="$RESULT_DIR/phase7-fairness-host-$STAMP.csv"
 PHASE8_CAPABILITY_RESULT_FILE="$RESULT_DIR/phase8-capability-host-$STAMP.txt"
+PHASE9_FADVISE_RESULT_FILE="$RESULT_DIR/phase9-fadvise-host-$STAMP.csv"
+PHASE9_DONTCACHE_RESULT_FILE="$RESULT_DIR/phase9-dontcache-host-$STAMP.csv"
+PHASE9_CACHE_RESULT_FILE="$RESULT_DIR/phase9-cache-pollution-host-$STAMP.csv"
+PHASE9_CONCURRENCY_RESULT_FILE="$RESULT_DIR/phase9-concurrency-host-$STAMP.csv"
 METADATA_FILE="$RESULT_DIR/phase4-host-$STAMP.txt"
 
 if ! command -v cmake >/dev/null 2>&1; then
@@ -52,9 +56,11 @@ PHASE5_BENCH="$BUILD_DIR/intentio_phase5_benchmark"
 PHASE6_BENCH="$BUILD_DIR/intentio_phase6_benchmark"
 PHASE7_BENCH="$BUILD_DIR/intentio_phase7_benchmark"
 PHASE8_INFO="$BUILD_DIR/intentio-info"
+PHASE9_BENCH="$BUILD_DIR/intentio_phase9_benchmark"
 if [ ! -x "$PHASE4_BENCH" ] || [ ! -x "$PLANNER_BENCH" ] ||
    [ ! -x "$PHASE5_BENCH" ] || [ ! -x "$PHASE6_BENCH" ] ||
-   [ ! -x "$PHASE7_BENCH" ] || [ ! -x "$PHASE8_INFO" ]; then
+   [ ! -x "$PHASE7_BENCH" ] || [ ! -x "$PHASE8_INFO" ] ||
+   [ ! -x "$PHASE9_BENCH" ]; then
     echo "Expected benchmark binaries were not produced in $BUILD_DIR" >&2
     exit 1
 fi
@@ -204,6 +210,74 @@ rm -f "$temporary"
 "$PHASE7_BENCH" --mode fairness --backend threaded --qd 8 --workers 8 \
     --groups 32 --requests 64 > "$PHASE7_FAIRNESS_RESULT_FILE"
 
+first_phase9_fadvise_row=true
+for policy in baseline sequential noreuse; do
+    for request_size in 4096 65536 262144 1048576; do
+        temporary=$(mktemp)
+        "$PHASE9_BENCH" --mode scan --policy "$policy" --workload sequential \
+            --qd 16 --workers 16 --requests 64 --request-size "$request_size" \
+            --repetitions 1 --materialize-file > "$temporary"
+        if [ "$first_phase9_fadvise_row" = true ]; then
+            cp "$temporary" "$PHASE9_FADVISE_RESULT_FILE"
+            first_phase9_fadvise_row=false
+        else
+            tail -n +2 "$temporary" >> "$PHASE9_FADVISE_RESULT_FILE"
+        fi
+        rm -f "$temporary"
+    done
+done
+
+first_phase9_dontcache_row=true
+for workload in random4k random64k mixed sequential; do
+    for policy in baseline random noreuse dontcache; do
+        temporary=$(mktemp)
+        "$PHASE9_BENCH" --mode scan --policy "$policy" --workload "$workload" \
+            --qd 16 --workers 16 --requests 128 --repetitions 1 \
+            --materialize-file > "$temporary"
+        if [ "$first_phase9_dontcache_row" = true ]; then
+            cp "$temporary" "$PHASE9_DONTCACHE_RESULT_FILE"
+            first_phase9_dontcache_row=false
+        else
+            tail -n +2 "$temporary" >> "$PHASE9_DONTCACHE_RESULT_FILE"
+        fi
+        rm -f "$temporary"
+    done
+done
+
+first_phase9_cache_row=true
+for materialize_flag in --materialize-file ""; do
+    temporary=$(mktemp)
+    "$PHASE9_BENCH" --mode cache-pollution --qd 16 --workers 16 \
+        --hot-mib 4 --hot-requests 1024 --scan-mib 64 \
+        $materialize_flag > "$temporary"
+    if [ "$first_phase9_cache_row" = true ]; then
+        cp "$temporary" "$PHASE9_CACHE_RESULT_FILE"
+        first_phase9_cache_row=false
+    else
+        tail -n +2 "$temporary" >> "$PHASE9_CACHE_RESULT_FILE"
+    fi
+    rm -f "$temporary"
+done
+
+first_phase9_concurrency_row=true
+for workload in random4k sequential; do
+    for policy in baseline noreuse dontcache; do
+        for qd in 1 4 16 64; do
+            temporary=$(mktemp)
+            "$PHASE9_BENCH" --mode scan --policy "$policy" --workload "$workload" \
+                --qd "$qd" --workers 64 --requests 64 --repetitions 1 \
+                --materialize-file > "$temporary"
+            if [ "$first_phase9_concurrency_row" = true ]; then
+                cp "$temporary" "$PHASE9_CONCURRENCY_RESULT_FILE"
+                first_phase9_concurrency_row=false
+            else
+                tail -n +2 "$temporary" >> "$PHASE9_CONCURRENCY_RESULT_FILE"
+            fi
+            rm -f "$temporary"
+        done
+    done
+done
+
 echo "Phase 4 benchmark results: $RESULT_FILE"
 echo "Planner-only results: $PLANNER_RESULT_FILE"
 echo "Phase 5 intent results: $PHASE5_RESULT_FILE"
@@ -213,4 +287,8 @@ echo "Phase 7 batch-size results: $PHASE7_BATCH_RESULT_FILE"
 echo "Phase 7 workload results: $PHASE7_WORKLOAD_RESULT_FILE"
 echo "Phase 7 fairness results: $PHASE7_FAIRNESS_RESULT_FILE"
 echo "Phase 8 io_uring capability: $PHASE8_CAPABILITY_RESULT_FILE"
+echo "Phase 9 fadvise results: $PHASE9_FADVISE_RESULT_FILE"
+echo "Phase 9 RWF_DONTCACHE results: $PHASE9_DONTCACHE_RESULT_FILE"
+echo "Phase 9 cache-pollution results: $PHASE9_CACHE_RESULT_FILE"
+echo "Phase 9 concurrency results: $PHASE9_CONCURRENCY_RESULT_FILE"
 echo "Environment metadata: $METADATA_FILE"

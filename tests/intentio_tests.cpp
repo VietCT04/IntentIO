@@ -713,6 +713,90 @@ void test_threaded_randomized_differential() {
     ::close(other_fd);
 }
 
+void test_kernel_io_intent() {
+    TestFile file(128U * 1024U);
+
+    intentio::RuntimeOptions sequential_options;
+    sequential_options.backend = intentio::Backend::ThreadedPread;
+    sequential_options.threaded_worker_count = 2;
+    sequential_options.execution.max_in_flight = 2;
+    sequential_options.coalescing.enabled = false;
+    auto sequential_runtime = intentio::Runtime(sequential_options);
+    auto sequential_group = sequential_runtime.create_group();
+    sequential_group.access_pattern(intentio::AccessPattern::Sequential);
+    sequential_group.read(file.fd(), 0, 4096);
+    sequential_group.read(file.fd(), 8192, 4096);
+    const auto sequential_results = sequential_group.submit();
+    expect(sequential_results.size() == 2 && sequential_results[0].ok() &&
+               sequential_results[1].ok(),
+           "sequential kernel policy should preserve reads");
+    const auto sequential_metrics = sequential_runtime.metrics();
+    expect(sequential_metrics.kernel_advice_sequential == 2,
+           "sequential intent should issue one SEQUENTIAL advice per physical read");
+
+    intentio::RuntimeOptions noreuse_options = sequential_options;
+    noreuse_options.kernel_io.enable_dontcache = false;
+    auto noreuse_runtime = intentio::Runtime(noreuse_options);
+    auto noreuse_group = noreuse_runtime.create_group();
+    noreuse_group.reuse_hint(intentio::ReuseHint::ScanOnce);
+    noreuse_group.read(file.fd(), 16384, 4096);
+    const auto noreuse_results = noreuse_group.submit();
+    expect(noreuse_results.size() == 1 && noreuse_results[0].ok(),
+           "NOREUSE kernel policy should preserve reads");
+    const auto noreuse_metrics = noreuse_runtime.metrics();
+    expect(noreuse_metrics.kernel_advice_noreuse == 1,
+           "ScanOnce without DONTCACHE should issue NOREUSE advice");
+
+    auto dontcache_runtime = intentio::Runtime(sequential_options);
+    auto dontcache_group = dontcache_runtime.create_group();
+    dontcache_group.reuse_hint(intentio::ReuseHint::ScanOnce);
+    dontcache_group.read(file.fd(), 32768, 4096);
+    const auto dontcache_results = dontcache_group.submit();
+    expect(dontcache_results.size() == 1 && dontcache_results[0].ok(),
+           "DONTCACHE kernel policy should preserve reads or use safe fallback");
+    const auto dontcache_metrics = dontcache_runtime.metrics();
+    expect(dontcache_metrics.dontcache_reads_attempted == 1 &&
+               dontcache_metrics.dontcache_reads_succeeded +
+                       dontcache_metrics.dontcache_fallbacks ==
+                   dontcache_metrics.dontcache_reads_attempted,
+           "DONTCACHE accounting should distinguish success and fallback");
+
+    intentio::Runtime invalid_dontcache_runtime(sequential_options);
+    auto invalid_dontcache_group = invalid_dontcache_runtime.create_group();
+    invalid_dontcache_group.reuse_hint(intentio::ReuseHint::ScanOnce);
+    invalid_dontcache_group.read(-1, 0, 4096);
+    const auto invalid_dontcache_results = invalid_dontcache_group.submit();
+    expect(invalid_dontcache_results.size() == 1 &&
+               !invalid_dontcache_results.front().ok() &&
+               invalid_dontcache_results.front().error.value() == EBADF,
+           "DONTCACHE should preserve invalid descriptor errors");
+    const auto invalid_dontcache_metrics = invalid_dontcache_runtime.metrics();
+    expect(invalid_dontcache_metrics.dontcache_reads_attempted == 1 &&
+               invalid_dontcache_metrics.dontcache_reads_succeeded == 0 &&
+               invalid_dontcache_metrics.dontcache_fallbacks == 0,
+           "failed DONTCACHE reads should not be counted as successes");
+
+    intentio::Runtime mixed_runtime(sequential_options);
+    auto sequential_mixed_group = mixed_runtime.create_group();
+    sequential_mixed_group.access_pattern(intentio::AccessPattern::Sequential);
+    sequential_mixed_group.read(file.fd(), 4096, 4096);
+    auto scan_once_mixed_group = mixed_runtime.create_group();
+    scan_once_mixed_group.reuse_hint(intentio::ReuseHint::ScanOnce);
+    scan_once_mixed_group.read(file.fd(), 4096, 4096);
+    auto sequential_mixed_submission = mixed_runtime.submit(sequential_mixed_group);
+    auto scan_once_mixed_submission = mixed_runtime.submit(scan_once_mixed_group);
+    const auto sequential_mixed = sequential_mixed_submission.get();
+    const auto scan_once_mixed = scan_once_mixed_submission.get();
+    expect_result(sequential_mixed.front(), file.expected(4096, 4096),
+                  "mixed sequential policy");
+    expect_result(scan_once_mixed.front(), file.expected(4096, 4096),
+                  "mixed scan-once policy");
+    const auto mixed_metrics = mixed_runtime.metrics();
+    expect(mixed_metrics.kernel_advice_sequential == 1 &&
+               mixed_metrics.dontcache_reads_attempted == 1,
+           "conflicting intents on one fd should retain separate policies");
+}
+
 void test_adaptive_concurrency() {
     TestFile file(131072);
     intentio::RuntimeOptions options;
@@ -879,6 +963,7 @@ int main() {
         test_randomized_differential();
         test_threaded_backend_correctness();
         test_threaded_randomized_differential();
+        test_kernel_io_intent();
         test_adaptive_concurrency();
         test_threaded_lifecycle();
         test_concurrent_submissions_and_error_isolation();
